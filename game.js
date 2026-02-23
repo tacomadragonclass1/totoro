@@ -1,0 +1,485 @@
+// --- CONFIGURATION ---
+// This object tells Phaser how to set up the game.
+const config = {
+    type: Phaser.AUTO, // Automatically choose WebGL or Canvas
+    width: 800,        // Game width
+    height: 600,       // Game height
+    physics: {
+        default: 'arcade', // Use the simple Arcade Physics system
+        arcade: {
+            gravity: { y: 600 }, // Vertical gravity pulling down
+            debug: false         // Set to true to see collision boxes
+        }
+    },
+    scene: {
+        preload: preload,
+        create: create,
+        update: update
+    }
+};
+
+// Initialize the game with the config
+const game = new Phaser.Game(config);
+
+// --- GLOBAL VARIABLES ---
+let player;
+let cursors;
+let platforms;
+let wordBlocks;
+let textGroup;
+let bg1, bg2, fg, debrisEmitter;
+let currentLevel = 0;
+let levelText;
+let leftButtonPressed = false;
+let rightButtonPressed = false;
+let enemies;
+
+// --- LEVEL DATA ---
+// 10 Levels with a target word and 3 options for each
+const levels = [
+    { target: "CAT", options: ["BAT", "CAT", "RAT"] },
+    { target: "DOG", options: ["DOG", "LOG", "FOG"] },
+    { target: "SUN", options: ["RUN", "SUN", "FUN"] },
+    { target: "RED", options: ["BED", "RED", "FED"] },
+    { target: "ONE", options: ["WON", "TON", "ONE"] },
+    { target: "BIG", options: ["PIG", "BIG", "DIG"] },
+    { target: "HOP", options: ["MOP", "TOP", "HOP"] },
+    { target: "SKY", options: ["SKY", "FLY", "DRY"] },
+    { target: "FOX", options: ["BOX", "FOX", "POX"] },
+    { target: "JAM", options: ["HAM", "JAM", "DAM"] }
+];
+
+// --- PRELOAD FUNCTION ---
+// Load all images and assets before the game starts
+function preload() {
+    // Load Backgrounds
+    this.load.image('bg1', 'Background1.png');
+    this.load.image('bg2', 'Background2.png');
+    this.load.image('brickpath', 'brickpath.png');
+    this.load.image('wordblock', 'wordblock.png');
+    this.load.image('wordblocksmash', 'wordblocksmash.png');
+
+    // // Load audio files (make sure you have jump.mp3 and hit.mp3 in your folder)
+    // this.load.audio('jumpSound', 'jump.mp3');
+    // this.load.audio('hitSound', 'hit.mp3');
+
+    // Load Totoro Sprites (Frames for animation)
+    this.load.image('totoro1', 'Totoro1.png');
+    this.load.image('totoro2', 'Totoro2.png');
+    this.load.image('totoro3', 'Totoro3.png');
+    this.load.image('totoro4', 'Totoro4.png');
+
+    // Load Mike (Bad Guy)
+    this.load.image('mike1', 'mike1.png');
+    this.load.image('mike2', 'mike2.png');
+    this.load.image('mike3', 'mike3.png');
+}
+
+// --- CREATE FUNCTION ---
+// Set up the game world, objects, and inputs
+function create() {
+    // 1. Add Parallax Backgrounds
+    // Get image dimensions to position them correctly
+    const bg1Height = this.textures.get('bg1').getSourceImage().height || 600;
+    const bg2Height = this.textures.get('bg2').getSourceImage().height || 600;
+    const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
+
+    // BG1: Scale to fit height, anchor to bottom
+    const bgScale = 600 / bg1Height;
+    bg1 = this.add.tileSprite(0, 600, 800, 600, 'bg1').setOrigin(0, 1);
+    bg1.setTileScale(bgScale);
+    
+    // BG2: Use actual image height, anchor to bottom so it sits on the ground
+    bg2 = this.add.tileSprite(0, 600, 800, bg2Height, 'bg2').setOrigin(0, 1);
+
+    // FG: Brick path at the bottom, overlapping bg2
+    fg = this.add.tileSprite(0, 600, 800, fgHeight, 'brickpath').setOrigin(0, 1);
+    
+    // Fix backgrounds to the camera so they don't scroll away; we will scroll their texture instead
+    bg1.setScrollFactor(0);
+    bg2.setScrollFactor(0);
+    fg.setScrollFactor(0);
+
+    // Dynamically create a small brown texture for debris particles, so we don't need another image file
+    const graphics = this.make.graphics();
+    graphics.fillStyle(0x8B4513, 1); // Brown color
+    graphics.fillRect(0, 0, 8, 8);
+    graphics.generateTexture('debris', 8, 8);
+    graphics.destroy();
+
+    // Create a single, reusable particle emitter. This is the most performant way.
+    // We will move this emitter to the block's position and tell it to explode
+    debrisEmitter = this.add.particles(0, 0, 'debris', {
+        speed: { min: 50, max: 200 },
+        angle: { min: 45, max: 135 },
+        scale: { start: 1, end: 0 },
+        lifespan: 800,
+        gravityY: 300,
+        emitting: false // IMPORTANT: Start the emitter turned off
+    });
+
+    // 2. Create Animations
+    this.anims.create({
+        key: 'run',
+        frames: [
+            { key: 'totoro2' },
+            { key: 'totoro3' },
+            { key: 'totoro4' }
+        ],
+        frameRate: 10,
+        repeat: -1 // Loop forever
+    });
+
+    this.anims.create({
+        key: 'idle',
+        frames: [ { key: 'totoro1' } ],
+        frameRate: 20
+    });
+
+    this.anims.create({
+        key: 'mikeWalk',
+        frames: [
+            { key: 'mike1' },
+            { key: 'mike2' },
+            { key: 'mike3' },
+            { key: 'mike2' }
+        ],
+        frameRate: 4, // Slow walk
+        repeat: -1
+    });
+
+    // 3. Create Player (Totoro)
+    player = this.physics.add.sprite(100, 455, 'totoro1');
+    player.setBounce(0.1); // Slight bounce when hitting ground
+    player.setCollideWorldBounds(true); // Keep inside the world
+
+    // Adjust the physics body to be smaller and lower, to match the visual feet.
+    // This prevents the "hovering" look.
+    // setSize(width, height) and setOffset(x_from_left, y_from_top)
+    player.body.setSize(50, 60).setOffset(7, 20);
+    
+    // 4. Camera Setup
+    // Camera follows the player
+    // Set bounds to 3000px (approx 3.75 screens) to allow walking
+    this.physics.world.setBounds(0, 0, 3000, 600);
+    this.cameras.main.setBounds(0, 0, 3000, 600);
+    this.cameras.main.startFollow(player);
+
+    // 5. Inputs
+    cursors = this.input.keyboard.createCursorKeys();
+    this.input.addPointer(3); // Enable multi-touch support (e.g. run + jump)
+    
+    // 6. Create Groups for Objects
+    platforms = this.physics.add.staticGroup(); // Static objects don't move
+    wordBlocks = this.physics.add.staticGroup();
+    textGroup = this.add.group(); // Group for text labels
+    enemies = this.physics.add.group(); // Group for bad guys
+
+    // 7. Collisions
+    this.physics.add.collider(player, platforms);
+    // When player hits a block, call the 'hitBlock' function
+    this.physics.add.collider(player, wordBlocks, hitBlock, null, this);
+    this.physics.add.collider(enemies, platforms);
+    this.physics.add.collider(player, enemies, hitEnemy, null, this);
+
+    // 8. UI Text
+    levelText = this.add.text(16, 16, 'Level: 1', { fontSize: '32px', fill: '#000' });
+    levelText.setScrollFactor(0); // Keep text fixed on screen
+
+    // 9. Start the first level
+    // 9. On-Screen Controls
+    // Create textures for controls dynamically to avoid loading more images
+    const controlGraphics = this.make.graphics();
+    // Arrow Button Texture
+    controlGraphics.fillStyle(0x000000, 0.3); // Black, 30% transparent
+    controlGraphics.fillTriangle(0, 25, 50, 0, 50, 50);
+    controlGraphics.generateTexture('arrowBtn', 50, 50);
+    
+    // Clear the graphics object before drawing the next shape
+    controlGraphics.clear();
+
+    // Jump Button Texture
+    controlGraphics.fillStyle(0x000000, 0.3);
+    controlGraphics.fillCircle(35, 35, 35);
+    controlGraphics.generateTexture('jumpBtn', 70, 70);
+    controlGraphics.destroy();
+
+    // Add button sprites to the screen
+    const jumpButton = this.add.sprite(config.width - 220, config.height - 70, 'jumpBtn').setInteractive().setScrollFactor(0);
+    const leftButton = this.add.sprite(config.width - 140, config.height - 70, 'arrowBtn').setInteractive().setScrollFactor(0);
+    const rightButton = this.add.sprite(config.width - 60, config.height - 70, 'arrowBtn').setInteractive().setScrollFactor(0);
+    
+    rightButton.flipX = true; // Flip the right arrow to point right
+
+    // Input events for Left Button
+    leftButton.on('pointerdown', () => { leftButtonPressed = true; });
+    leftButton.on('pointerup', () => { leftButtonPressed = false; });
+    leftButton.on('pointerout', () => { leftButtonPressed = false; }); // Stop if pointer leaves button
+
+    // Input events for Right Button
+    rightButton.on('pointerdown', () => { rightButtonPressed = true; });
+    rightButton.on('pointerup', () => { rightButtonPressed = false; });
+    rightButton.on('pointerout', () => { rightButtonPressed = false; }); // Stop if pointer leaves button
+
+    // Input event for Jump Button
+    jumpButton.on('pointerdown', () => {
+        if (player.body.touching.down || player.body.blocked.down) {
+            player.setVelocityY(-440);
+        }
+    });
+
+    // 10. Start the first level
+    spawnLevel.call(this, 0);
+}
+
+// --- UPDATE FUNCTION ---
+// Runs roughly 60 times per second to handle movement and logic
+function update() {
+    // 1. Parallax Scrolling
+    // Move background texture based on camera position to create depth
+    bg1.tilePositionX = this.cameras.main.scrollX * 0.3;
+    bg2.tilePositionX = this.cameras.main.scrollX * 0.7;
+    fg.tilePositionX = this.cameras.main.scrollX;
+
+    // 2. Player Movement (Keyboard)
+    if (cursors.left.isDown || leftButtonPressed) {
+        player.setVelocityX(-160);
+        player.anims.play('run', true);
+        player.setFlipX(true); // Flip sprite to face left
+    } else if (cursors.right.isDown || rightButtonPressed) {
+        player.setVelocityX(160);
+        player.anims.play('run', true);
+        player.setFlipX(false); // Default face right
+    } else {
+        player.setVelocityX(0);
+        player.anims.play('idle');
+    }
+
+    // 3. Jump (Spacebar)
+    if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
+        player.setVelocityY(-440);
+        // try { this.sound.play('jumpSound'); } catch (e) {}
+    }
+
+    // Mouse facing logic removed as requested
+
+    // 4. Enemy Movement (Patrol and Respawn)
+    enemies.children.iterate((mike) => {
+        // PRIORITY 1: Check if Mike needs to be respawned.
+        // A buffer of 100px ensures he is fully off-screen to the left.
+        if (mike.x < this.cameras.main.scrollX - 100) {
+            // He's left behind! Respawn him ahead of the player, just off-screen to the right.
+            // We're interpreting "ahead by 1 second" as a gameplay-friendly distance ahead.
+            mike.x = this.cameras.main.scrollX + config.width + 100;
+            
+            // We must also update his patrol start point, otherwise he might turn around immediately.
+            mike.startX = mike.x;
+
+            // Ensure he is moving left towards the player.
+            mike.setVelocityX(-30);
+            mike.setFlipX(true);
+        } else {
+            // PRIORITY 2: If not respawning, do normal patrol logic.
+            if (mike.body.velocity.x < 0 && mike.x < mike.startX - 200) {
+                mike.setVelocityX(30);
+                mike.setFlipX(false); // Face right
+            } else if (mike.body.velocity.x > 0 && mike.x > mike.startX + 200) {
+                mike.setVelocityX(-30);
+                mike.setFlipX(true); // Face left
+            }
+        }
+    });
+}
+
+// --- CUSTOM FUNCTIONS ---
+
+// Function to spawn a new level segment
+function spawnLevel(index) {
+    currentLevel = index;
+    levelText.setText('Level: ' + (currentLevel + 1));
+    
+    // Calculate the starting X position for this level
+    // Each level is 3000px wide. Level 0 starts at 0, Level 1 at 3000, etc.
+    const startX = currentLevel * 3000;
+
+    // Expand the world and camera bounds to include the new level area
+    const newMaxX = startX + 3000;
+    this.physics.world.setBounds(0, 0, newMaxX, 600);
+    this.cameras.main.setBounds(0, 0, newMaxX, 600);
+
+    // Add a new floor segment for this level
+    // Get height of brickpath to align floor collision exactly with the visual
+    const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
+    // Position floor so it matches the brickpath height at the bottom of the screen
+    let floor = this.add.rectangle(startX + 1500, 600 - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
+    floor.setVisible(false); // Hide the green color so only the brick path is seen
+    this.physics.add.existing(floor, true);
+    platforms.add(floor);
+
+    // --- PLATFORM GENERATION ---
+    // Determine number of platforms based on level (Level 1 = 0, Level 2 = 1, etc.)
+    // We cap at 4 platforms to ensure they fit comfortably on the screen.
+    const numPlatforms = Math.min(currentLevel, 4);
+
+    // Default positions for blocks (used for Level 1 when there are no platforms)
+    let blockY = 350; 
+    let blockXBase = startX + 1800;
+
+    if (numPlatforms > 0) {
+        let platX = startX + 1200; // Start placing platforms here
+        let platY = 500;           // Start height (100px above ground)
+
+        for (let i = 0; i < numPlatforms; i++) {
+            // Determine if this is the final platform
+            const isFinalPlatform = (i === numPlatforms - 1);
+            
+            // Final platform is wider (600px) to span all 3 blocks, others are 200px
+            const platWidth = isFinalPlatform ? 600 : 200;
+            
+            // Shift the final platform to the right so it centers under the blocks
+            // Normal platforms are centered at platX. Final is centered at platX + 200.
+            const currentPlatX = isFinalPlatform ? platX + 200 : platX;
+
+            // Create a platform: Brown color
+            let platform = this.add.rectangle(currentPlatX, platY, platWidth, 40, 0x8B4513);
+            
+            // Enable physics for the platform
+            // 'true' as the second argument makes it a static body (it won't move or fall)
+            this.physics.add.existing(platform, true); 
+            
+            // Add to the platforms group so Totoro collides with it automatically
+            platforms.add(platform);
+
+            // If this is the highest platform in the sequence, place the word blocks above it
+            if (isFinalPlatform) {
+                blockY = platY - 150; // Place blocks 150px above the platform
+                blockXBase = platX;   // Align blocks horizontally with this platform
+            }
+
+            // Calculate position for the next platform (step up and to the right)
+            platX += 250; 
+            platY -= 90;
+        }
+    }
+
+    // --- SPAWN MIKE (BAD GUY) ---
+    // Place him on the ground, a bit ahead of the player
+    // Adjust Y to ensure he sits on the floor (floor is at 600 - fgHeight/2)
+    // Let's put him at y=500 and let gravity settle him, or calculate exact.
+    let mike = enemies.create(startX + 600, 500, 'mike1');
+    mike.setScale(0.8);
+    mike.setCollideWorldBounds(true);
+    mike.startX = startX + 600; // Remember starting spot for patrol
+    mike.setVelocityX(-30); // Start walking left
+    mike.setFlipX(true);
+    mike.anims.play('mikeWalk');
+
+    // Get data for the current level (loop back to 0 if we pass level 10)
+    const data = levels[currentLevel % levels.length];
+
+    // Speak the target word
+    speak(data.target);
+
+    // Create 3 blocks
+    // Position blocks relative to the calculated base (either ground or top platform)
+    const positions = [blockXBase, blockXBase + 200, blockXBase + 400];
+    
+    for (let i = 0; i < 3; i++) {
+        let x = positions[i];
+        let y = blockY; // Use the calculated height
+
+        let block = wordBlocks.create(x, y, 'wordblock');
+        block.word = data.options[i]; // Store the word inside the block object
+
+        // Add text on top of the block
+        let text = this.add.text(x, y, data.options[i], { 
+            fontSize: '24px', 
+            fill: '#ffffff',
+            fontStyle: 'bold'
+        });
+        text.setOrigin(0.5); // Center text
+        textGroup.add(text);
+
+        // Link the block to its text object so we can hide/show it during the smash animation
+        block.textObject = text;
+    }
+}
+
+// Function called when player touches a block
+function hitBlock(player, block) {
+    // Only trigger if player hits the BOTTOM of the block (jumping up)
+    if (player.body.touching.up && block.body.touching.down) {
+        
+        // try { this.sound.play('hitSound'); } catch (e) {}
+
+        const data = levels[currentLevel % levels.length];
+        
+        if (block.word === data.target) {
+            // CORRECT!
+            block.setTint(0x00ff00); // Tint Green
+            block.body.enable = false;  // Disable block so it can't be hit again
+            speak("Level Complete");
+            
+            // Generate the next level immediately so player can walk to it
+            spawnLevel.call(this, currentLevel + 1);
+            
+        } else {
+            // INCORRECT!
+            // Disable the block so it can't be hit again immediately
+            block.body.enable = false;
+            // Hide the text that is on the block
+            if (block.textObject) {
+                block.textObject.setVisible(false);
+            }
+            
+            // Change texture to the smashed version
+            block.setTexture('wordblocksmash');
+
+            // Use our single, pre-made emitter to create a burst of particles.
+            // This is very fast and avoids creating new objects during gameplay.
+            debrisEmitter.explode(15, block.x, block.y);
+
+            // After 2 seconds, fade out and destroy the smashed block
+            this.time.delayedCall(2000, () => {
+                // Create a tween to fade the smashed block out
+                this.tweens.add({
+                    targets: block,
+                    alpha: 0,
+                    duration: 500, // 0.5 second fade-out time
+                    onComplete: () => {
+                        // Destroy the block and its text object to clean up
+                        if (block.textObject) {
+                            block.textObject.destroy();
+                        }
+                        block.destroy();
+                    }
+                });
+            });
+        }
+    }
+}
+
+// Function called when player touches Mike
+function hitEnemy(player, enemy) {
+    this.physics.pause(); // Stop the game
+    player.setTint(0xff0000); // Turn red
+    player.anims.play('idle');
+    
+    // Restart game after 1 second
+    this.time.delayedCall(1000, () => {
+        currentLevel = 0;
+        this.scene.restart();
+    });
+}
+
+// Function to use browser Text-to-Speech
+function speak(text) {
+    // Check if browser supports speech
+    if ('speechSynthesis' in window) {
+        // Cancel any current speech so they don't overlap
+        window.speechSynthesis.cancel();
+        
+        const utterance = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(utterance);
+    }
+}
