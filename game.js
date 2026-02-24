@@ -25,6 +25,7 @@ const game = new Phaser.Game(config);
 let player;
 let cursors;
 let platforms;
+let floors;
 let wordBlocks;
 let textGroup;
 let bg1, bg2, fg, debrisEmitter;
@@ -33,6 +34,10 @@ let levelText;
 let leftButtonPressed = false;
 let rightButtonPressed = false;
 let enemies;
+let sootCoins;
+let score = 0;
+let scoreText;
+let audioCtx;
 
 // --- LEVEL DATA ---
 // 10 Levels with a target word and 3 options for each
@@ -58,10 +63,12 @@ function preload() {
     this.load.image('brickpath', 'assets/brickpath.png');
     this.load.image('wordblock', 'assets/wordblock.png');
     this.load.image('wordblocksmash', 'assets/wordblocksmash.png');
+    this.load.image('platform', 'assets/platform.png');
 
     // // Load audio files (make sure you have jump.mp3 and hit.mp3 in your folder)
     // this.load.audio('jumpSound', 'jump.mp3');
     // this.load.audio('hitSound', 'assets/hit.mp3');
+    // this.load.audio('coinSound', 'assets/coin.mp3');
 
     // Load Totoro Sprites (Frames for animation)
     this.load.image('totoro1', 'assets/totoro1.png');
@@ -73,6 +80,7 @@ function preload() {
     this.load.image('mike1', 'assets/mike1.png');
     this.load.image('mike2', 'assets/mike2.png');
     this.load.image('mike3', 'assets/mike3.png');
+    this.load.image('sootcoin', 'assets/sootcoin.png');
 }
 
 // --- CREATE FUNCTION ---
@@ -81,6 +89,9 @@ function preload() {
 
 
 function create() {
+    // Reset score on game start/restart
+    score = 0;
+
     // 1. Add Parallax Backgrounds
     // Get image dimensions to position them correctly
     const bg1Height = this.textures.get('bg1').getSourceImage().height || 600;
@@ -174,20 +185,39 @@ function create() {
     
     // 6. Create Groups for Objects
     platforms = this.physics.add.staticGroup(); // Static objects don't move
+    floors = this.physics.add.staticGroup(); // Group for the ground floor
     wordBlocks = this.physics.add.staticGroup();
     textGroup = this.add.group(); // Group for text labels
     enemies = this.physics.add.group(); // Group for bad guys
+    sootCoins = this.physics.add.group({
+        dragX: 100, // Friction so they stop rolling eventually
+        bounceX: 0.5, // Bounciness
+        bounceY: 0.4
+    });
 
     // 7. Collisions
     this.physics.add.collider(player, platforms);
+    this.physics.add.collider(player, floors);
     // When player hits a block, call the 'hitBlock' function
     this.physics.add.collider(player, wordBlocks, hitBlock, null, this);
-    this.physics.add.collider(enemies, platforms);
+    this.physics.add.collider(enemies, floors);
     this.physics.add.collider(player, enemies, hitEnemy, null, this);
+    this.physics.add.collider(sootCoins, platforms);
+    this.physics.add.collider(sootCoins, floors);
+    this.physics.add.overlap(player, sootCoins, collectCoin, null, this);
 
     // 8. UI Text
     levelText = this.add.text(16, 16, 'Level: 1', { fontSize: '32px', fill: '#000' });
     levelText.setScrollFactor(0); // Keep text fixed on screen
+
+    scoreText = this.add.text(config.width - 16, 16, 'Coins: 0', { 
+        fontSize: '32px', 
+        fill: '#FFD700', 
+        stroke: '#000', 
+        strokeThickness: 4 
+    });
+    scoreText.setOrigin(1, 0); // Align right
+    scoreText.setScrollFactor(0);
 
     // 9. Start the first level
     // 9. On-Screen Controls
@@ -267,13 +297,31 @@ function update() {
     // Mouse facing logic removed as requested
 
     // 4. Enemy Movement (Patrol and Respawn)
+    const allMikes = enemies.getChildren();
     enemies.children.iterate((mike) => {
         // PRIORITY 1: Check if Mike needs to be respawned.
         // A buffer of 100px ensures he is fully off-screen to the left.
         if (mike.x < this.cameras.main.scrollX - 100) {
             // He's left behind! Respawn him ahead of the player, just off-screen to the right.
             // We're interpreting "ahead by 1 second" as a gameplay-friendly distance ahead.
-            mike.x = this.cameras.main.scrollX + config.width + 100;
+            let respawnX = this.cameras.main.scrollX + config.width + 100;
+
+            // Ensure we don't place him too close to another Mike
+            let safe = false;
+            let attempts = 0;
+            while (!safe && attempts < 50) {
+                safe = true;
+                attempts++;
+                for (let otherMike of allMikes) {
+                    if (mike !== otherMike && Math.abs(otherMike.x - respawnX) < 400) {
+                        respawnX += 150; // Push further ahead if too close
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+            
+            mike.x = respawnX;
             
             // We must also update his patrol start point, otherwise he might turn around immediately.
             mike.startX = mike.x;
@@ -289,6 +337,21 @@ function update() {
             } else if (mike.body.velocity.x > 0 && mike.x > mike.startX + 200) {
                 mike.setVelocityX(-30);
                 mike.setFlipX(true); // Face left
+            }
+        }
+    });
+
+    // 5. Sootcoin Flee Logic
+    sootCoins.children.iterate((coin) => {
+        if (coin && coin.body) {
+            const dist = Phaser.Math.Distance.Between(player.x, player.y, coin.x, coin.y);
+            // If player is close (within 200px), roll away!
+            if (dist < 200) {
+                if (player.x < coin.x) {
+                    coin.setVelocityX(75); // Roll right
+                } else {
+                    coin.setVelocityX(-75); // Roll left
+                }
             }
         }
     });
@@ -317,7 +380,42 @@ function spawnLevel(index) {
     let floor = this.add.rectangle(startX + 1500, 600 - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
     floor.setVisible(false); // Hide the green color so only the brick path is seen
     this.physics.add.existing(floor, true);
-    platforms.add(floor);
+    floors.add(floor);
+
+    // --- JUMP OVER MIKE PLATFORMS ---
+    // 3 short platforms in random order to help jump over Mike
+    let jumpX = startX + 400;
+    for (let i = 0; i < 3; i++) {
+        let jumpY;
+        if (i === 0) {
+            // First platform low enough to jump on (ground is ~575)
+            jumpY = Phaser.Math.Between(450, 480);
+        } else {
+            // Others random, can be higher or lower
+            jumpY = Phaser.Math.Between(350, 480);
+        }
+        
+        // Create short platform from image
+        let p = platforms.create(jumpX, jumpY, 'platform');
+        p.setDisplaySize(120, 40); // Set size
+        p.refreshBody(); // IMPORTANT: Update physics body after resize
+
+        // Chance to spawn a Sootcoin on the platform (80% chance)
+        if (Phaser.Math.Between(0, 100) < 80) {
+            let coin = sootCoins.create(jumpX, jumpY - 50, 'sootcoin');
+            coin.setScale(0.7);
+            this.tweens.add({
+                targets: coin,
+                scaleX: 0, // Spin effect (flip)
+                yoyo: true,
+                repeat: -1,
+                duration: 500
+            });
+        }
+
+        // Stagger X position
+        jumpX += Phaser.Math.Between(180, 250);
+    }
 
     // --- PLATFORM GENERATION ---
     // Determine number of platforms based on level (Level 1 = 0, Level 2 = 1, etc.)
@@ -343,19 +441,27 @@ function spawnLevel(index) {
             // Normal platforms are centered at platX. Final is centered at platX + 200.
             const currentPlatX = isFinalPlatform ? platX + 200 : platX;
 
-            // Create a platform: Brown color
-            let platform = this.add.rectangle(currentPlatX, platY, platWidth, 40, 0x8B4513);
-            
-            // Enable physics for the platform
-            // 'true' as the second argument makes it a static body (it won't move or fall)
-            this.physics.add.existing(platform, true); 
-            
-            // Add to the platforms group so Totoro collides with it automatically
-            platforms.add(platform);
+            // Create a platform from an image
+            let platform = platforms.create(currentPlatX, platY, 'platform');
+            platform.setDisplaySize(platWidth, 40);
+            platform.refreshBody(); // Refresh physics body after resize
+
+            // Chance to spawn a Sootcoin on the platform (80% chance)
+            if (Phaser.Math.Between(0, 100) < 80) {
+                let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
+                coin.setScale(0.7);
+                this.tweens.add({
+                    targets: coin,
+                    scaleX: 0, // Spin effect (flip)
+                    yoyo: true,
+                    repeat: -1,
+                    duration: 500
+                });
+            }
 
             // If this is the highest platform in the sequence, place the word blocks above it
             if (isFinalPlatform) {
-                blockY = platY - 150; // Place blocks 150px above the platform
+                blockY = platY - 220; // Place blocks higher up (was 150)
                 blockXBase = platX;   // Align blocks horizontally with this platform
             }
 
@@ -365,17 +471,43 @@ function spawnLevel(index) {
         }
     }
 
+    // --- SPAWN GROUND COINS ---
+    // Only place coins on the ground in the "empty space" between levels (start of segment)
+    for (let i = 0; i < 3; i++) {
+        let cx = startX + 500 + (i * 150); // Move coins further away from start
+        let coin = sootCoins.create(cx, 450, 'sootcoin'); // Spawn in air to fall
+        coin.setScale(0.7);
+        this.tweens.add({
+            targets: coin,
+            scaleX: 0, // Spin effect
+            yoyo: true,
+            repeat: -1,
+            duration: 500
+        });
+    }
+
     // --- SPAWN MIKE (BAD GUY) ---
     // Place him on the ground, a bit ahead of the player
     // Adjust Y to ensure he sits on the floor (floor is at 600 - fgHeight/2)
     // Let's put him at y=500 and let gravity settle him, or calculate exact.
-    let mike = enemies.create(startX + 600, 500, 'mike1');
-    mike.setScale(0.8);
-    mike.setCollideWorldBounds(true);
-    mike.startX = startX + 600; // Remember starting spot for patrol
-    mike.setVelocityX(-30); // Start walking left
-    mike.setFlipX(true);
-    mike.anims.play('mikeWalk');
+    
+    // Determine number of Mikes based on level
+    let numMikes = 1;
+    if (currentLevel >= 4) numMikes = 2; // Level 5+ (Index 4 is Level 5)
+    if (currentLevel >= 7) numMikes = 3; // Level 8+ (Index 7 is Level 8)
+
+    for (let i = 0; i < numMikes; i++) {
+        // Space them out so they aren't on top of each other
+        let mikeX = startX + 600 + (i * 500);
+
+        let mike = enemies.create(mikeX, 500, 'mike1');
+        mike.setScale(0.8);
+        mike.setCollideWorldBounds(true);
+        mike.startX = mikeX; // Remember starting spot for patrol
+        mike.setVelocityX(-30); // Start walking left
+        mike.setFlipX(true);
+        mike.anims.play('mikeWalk');
+    }
 
     // Get data for the current level (loop back to 0 if we pass level 10)
     const data = levels[currentLevel % levels.length];
@@ -475,6 +607,14 @@ function hitEnemy(player, enemy) {
     });
 }
 
+// Function called when player collects a coin
+function collectCoin(player, coin) {
+    coin.destroy();
+    playCoinSound();
+    score += 1;
+    scoreText.setText('Coins: ' + score);
+}
+
 // Function to use browser Text-to-Speech
 function speak(text) {
     // Check if browser supports speech
@@ -485,4 +625,33 @@ function speak(text) {
         const utterance = new SpeechSynthesisUtterance(text);
         window.speechSynthesis.speak(utterance);
     }
+}
+
+// Function to generate a coin sound using the Web Audio API (no file needed)
+function playCoinSound() {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) audioCtx = new AudioContext();
+    }
+    if (!audioCtx) return;
+
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(2000, audioCtx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
 }
