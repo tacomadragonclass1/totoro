@@ -353,6 +353,9 @@ function update() {
                     coin.setVelocityX(-75); // Roll left
                 }
             }
+
+            // Rotate based on velocity to look like rolling
+            coin.rotation += coin.body.velocity.x * 0.0035; // Decrease rotation speed by 30%
         }
     });
 }
@@ -363,13 +366,13 @@ function update() {
 function spawnLevel(index) {
     currentLevel = index;
     levelText.setText('Level: ' + (currentLevel + 1));
-    
+
     // Calculate the starting X position for this level
     // Each level is 3000px wide. Level 0 starts at 0, Level 1 at 3000, etc.
-    const startX = currentLevel * 3000;
+    const startX = currentLevel * 2400; // Increased distance between levels
 
     // Expand the world and camera bounds to include the new level area
-    const newMaxX = startX + 3000;
+    const newMaxX = startX + 2400;
     this.physics.world.setBounds(0, 0, newMaxX, 600);
     this.cameras.main.setBounds(0, 0, newMaxX, 600);
 
@@ -378,13 +381,13 @@ function spawnLevel(index) {
     const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
     // Position floor so it matches the brickpath height at the bottom of the screen
     let floor = this.add.rectangle(startX + 1500, 600 - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
-    floor.setVisible(false); // Hide the green color so only the brick path is seen
+    floor.setVisible(false);
     this.physics.add.existing(floor, true);
     floors.add(floor);
 
     // --- JUMP OVER MIKE PLATFORMS ---
     // 3 short platforms in random order to help jump over Mike
-    let jumpX = startX + 400;
+    let jumpX = startX + 250;
     for (let i = 0; i < 3; i++) {
         let jumpY;
         if (i === 0) {
@@ -400,21 +403,19 @@ function spawnLevel(index) {
         p.setDisplaySize(120, 40); // Set size
         p.refreshBody(); // IMPORTANT: Update physics body after resize
 
+        // One-way collision: Only collide from top
+        p.body.checkCollision.down = false;
+        p.body.checkCollision.left = false;
+        p.body.checkCollision.right = false;
+
         // Chance to spawn a Sootcoin on the platform (80% chance)
         if (Phaser.Math.Between(0, 100) < 80) {
             let coin = sootCoins.create(jumpX, jumpY - 50, 'sootcoin');
             coin.setScale(0.7);
-            this.tweens.add({
-                targets: coin,
-                scaleX: 0, // Spin effect (flip)
-                yoyo: true,
-                repeat: -1,
-                duration: 500
-            });
         }
 
         // Stagger X position
-        jumpX += Phaser.Math.Between(180, 250);
+        jumpX += Phaser.Math.Between(120, 160);
     }
 
     // --- PLATFORM GENERATION ---
@@ -427,7 +428,7 @@ function spawnLevel(index) {
     let blockXBase = startX + 1800;
 
     if (numPlatforms > 0) {
-        let platX = startX + 1200; // Start placing platforms here
+        let platX = startX + 1000; // Start placing platforms here
         let platY = 500;           // Start height (100px above ground)
 
         for (let i = 0; i < numPlatforms; i++) {
@@ -446,17 +447,15 @@ function spawnLevel(index) {
             platform.setDisplaySize(platWidth, 40);
             platform.refreshBody(); // Refresh physics body after resize
 
+            // One-way collision: Only collide from top
+            platform.body.checkCollision.down = false;
+            platform.body.checkCollision.left = false;
+            platform.body.checkCollision.right = false;
+
             // Chance to spawn a Sootcoin on the platform (80% chance)
             if (Phaser.Math.Between(0, 100) < 80) {
                 let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
                 coin.setScale(0.7);
-                this.tweens.add({
-                    targets: coin,
-                    scaleX: 0, // Spin effect (flip)
-                    yoyo: true,
-                    repeat: -1,
-                    duration: 500
-                });
             }
 
             // If this is the highest platform in the sequence, place the word blocks above it
@@ -474,16 +473,9 @@ function spawnLevel(index) {
     // --- SPAWN GROUND COINS ---
     // Only place coins on the ground in the "empty space" between levels (start of segment)
     for (let i = 0; i < 3; i++) {
-        let cx = startX + 500 + (i * 150); // Move coins further away from start
+        let cx = startX + 400 + (i * 150); // Move coins further away from start
         let coin = sootCoins.create(cx, 450, 'sootcoin'); // Spawn in air to fall
         coin.setScale(0.7);
-        this.tweens.add({
-            targets: coin,
-            scaleX: 0, // Spin effect
-            yoyo: true,
-            repeat: -1,
-            duration: 500
-        });
     }
 
     // --- SPAWN MIKE (BAD GUY) ---
@@ -498,10 +490,10 @@ function spawnLevel(index) {
 
     for (let i = 0; i < numMikes; i++) {
         // Space them out so they aren't on top of each other
-        let mikeX = startX + 600 + (i * 500);
+        let mikeX = startX + 600 + (i * 400);
 
         let mike = enemies.create(mikeX, 500, 'mike1');
-        mike.setScale(0.8);
+        mike.setScale(0.64); // Decrease size by 20% (0.8 * 0.8 = 0.64)
         mike.setCollideWorldBounds(true);
         mike.startX = mikeX; // Remember starting spot for patrol
         mike.setVelocityX(-30); // Start walking left
@@ -513,7 +505,10 @@ function spawnLevel(index) {
     const data = levels[currentLevel % levels.length];
 
     // Speak the target word
-    speak(data.target);
+    // Delay slightly to prevent hang during level generation
+    this.time.delayedCall(100, () => {
+        speak(data.target);
+    });
 
     // Create 3 blocks
     // Position blocks relative to the calculated base (either ground or top platform)
