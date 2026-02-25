@@ -38,6 +38,11 @@ let sootCoins;
 let score = 0;
 let scoreText;
 let audioCtx;
+let audioTriggerX = 0;
+let wordSpoken = true;
+let flowerEmitter;
+let ctrlKey;
+let isSmashing = false;
 
 // --- LEVEL DATA ---
 // 10 Levels with a target word and 3 options for each
@@ -75,6 +80,8 @@ function preload() {
     this.load.image('totoro2', 'assets/totoro2.png');
     this.load.image('totoro3', 'assets/totoro3.png');
     this.load.image('totoro4', 'assets/totoro4.png');
+    this.load.image('totorosmash1', 'assets/totorosmash1.png');
+    this.load.image('totorosmash2', 'assets/totorosmash2.png');
 
     // Load Mike (Bad Guy)
     this.load.image('mike1', 'assets/mike1.png');
@@ -91,6 +98,7 @@ function preload() {
 function create() {
     // Reset score on game start/restart
     score = 0;
+    isSmashing = false;
 
     // 1. Add Parallax Backgrounds
     // Get image dimensions to position them correctly
@@ -132,6 +140,24 @@ function create() {
         emitting: false // IMPORTANT: Start the emitter turned off
     });
 
+    // Create a texture for flower particles
+    const flowerGraphics = this.make.graphics();
+    flowerGraphics.fillStyle(0xFF69B4, 1); // HotPink
+    flowerGraphics.fillCircle(5, 5, 5);
+    flowerGraphics.fillStyle(0xFFFF00, 1); // Yellow center
+    flowerGraphics.fillCircle(5, 5, 2);
+    flowerGraphics.generateTexture('flower', 10, 10);
+    flowerGraphics.destroy();
+
+    flowerEmitter = this.add.particles(0, 0, 'flower', {
+        speed: { min: 50, max: 200 },
+        angle: { min: 0, max: 360 },
+        scale: { start: 1, end: 0 },
+        lifespan: 1000,
+        gravityY: 200,
+        emitting: false
+    });
+
     // 2. Create Animations
     this.anims.create({
         key: 'run',
@@ -162,6 +188,17 @@ function create() {
         repeat: -1
     });
 
+    this.anims.create({
+        key: 'smash',
+        frames: [
+            { key: 'totorosmash1' },
+            { key: 'totorosmash2' },
+            { key: 'totorosmash1' }
+        ],
+        frameRate: 10,
+        repeat: 0
+    });
+
     // 3. Create Player (Totoro)
     player = this.physics.add.sprite(100, 455, 'totoro1');
     player.setBounce(0.1); // Slight bounce when hitting ground
@@ -181,6 +218,7 @@ function create() {
 
     // 5. Inputs
     cursors = this.input.keyboard.createCursorKeys();
+    ctrlKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL);
     this.input.addPointer(3); // Enable multi-touch support (e.g. run + jump)
     
     // 6. Create Groups for Objects
@@ -274,24 +312,70 @@ function update() {
     bg2.tilePositionX = this.cameras.main.scrollX * 0.7;
     fg.tilePositionX = this.cameras.main.scrollX;
 
-    // 2. Player Movement (Keyboard)
-    if (cursors.left.isDown || leftButtonPressed) {
-        player.setVelocityX(-160);
-        player.anims.play('run', true);
-        player.setFlipX(true); // Flip sprite to face left
-    } else if (cursors.right.isDown || rightButtonPressed) {
-        player.setVelocityX(160);
-        player.anims.play('run', true);
-        player.setFlipX(false); // Default face right
-    } else {
+    // 2. Smash Attack
+    if (ctrlKey.isDown && !isSmashing) {
+        isSmashing = true;
         player.setVelocityX(0);
-        player.anims.play('idle');
+
+        // Calculate alignment to keep Totoro centered despite wider image
+        // We set the origin so the "Totoro" part of the smash image aligns with the player body
+        const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
+        const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 100;
+        const newOriginX = (totoroWidth / 2) / smashWidth;
+        
+        player.setOrigin(newOriginX, 0.5);
+        player.anims.play('smash');
+
+        player.once('animationcomplete', () => {
+            isSmashing = false;
+            player.setOrigin(0.5, 0.5); // Reset to center
+        });
     }
 
-    // 3. Jump (Spacebar)
-    if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
-        player.setVelocityY(-440);
-        // try { this.sound.play('jumpSound'); } catch (e) {}
+    if (isSmashing) {
+        // Smash Hit Detection
+        const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
+        const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 100;
+        const reach = smashWidth - totoroWidth;
+        const hitRange = (totoroWidth / 2) + reach;
+
+        enemies.children.iterate((mike) => {
+            if (!mike.active) return;
+            // Check if Mike is close vertically
+            if (Math.abs(mike.y - player.y) < 60) {
+                const dist = mike.x - player.x;
+                if (!player.flipX) { // Facing Right
+                    if (dist > 0 && dist < hitRange) {
+                        mike.destroy();
+                        debrisEmitter.explode(30, mike.x, mike.y);
+                    }
+                } else { // Facing Left
+                    if (dist < 0 && dist > -hitRange) {
+                        mike.destroy();
+                        debrisEmitter.explode(30, mike.x, mike.y);
+                    }
+                }
+            }
+        });
+    } else {
+        // 3. Player Movement (Keyboard) - Only if not smashing
+        if (cursors.left.isDown || leftButtonPressed) {
+            player.setVelocityX(-160);
+            player.anims.play('run', true);
+            player.setFlipX(true); // Flip sprite to face left
+        } else if (cursors.right.isDown || rightButtonPressed) {
+            player.setVelocityX(160);
+            player.anims.play('run', true);
+            player.setFlipX(false); // Default face right
+        } else {
+            player.setVelocityX(0);
+            player.anims.play('idle');
+        }
+
+        // 4. Jump (Spacebar)
+        if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
+            player.setVelocityY(-440);
+        }
     }
 
     // Mouse facing logic removed as requested
@@ -358,6 +442,13 @@ function update() {
             coin.rotation += coin.body.velocity.x * 0.0035; // Decrease rotation speed by 30%
         }
     });
+
+    // 6. Audio Trigger for Target Word
+    if (!wordSpoken && player.x > audioTriggerX) {
+        const data = levels[currentLevel % levels.length];
+        speak(data.target);
+        wordSpoken = true;
+    }
 }
 
 // --- CUSTOM FUNCTIONS ---
@@ -504,11 +595,9 @@ function spawnLevel(index) {
     // Get data for the current level (loop back to 0 if we pass level 10)
     const data = levels[currentLevel % levels.length];
 
-    // Speak the target word
-    // Delay slightly to prevent hang during level generation
-    this.time.delayedCall(100, () => {
-        speak(data.target);
-    });
+    // Set audio trigger position (500px before the blocks)
+    audioTriggerX = blockXBase - 500;
+    wordSpoken = false;
 
     // Create 3 blocks
     // Position blocks relative to the calculated base (either ground or top platform)
@@ -546,8 +635,9 @@ function hitBlock(player, block) {
         
         if (block.word === data.target) {
             // CORRECT!
-            block.setTint(0x00ff00); // Tint Green
+            block.setTint(0xffff00); // Tint Bright Yellow
             block.body.enable = false;  // Disable block so it can't be hit again
+            flowerEmitter.explode(30, block.x, block.y); // Flower burst
             speak("Level Complete");
             
             // Generate the next level immediately so player can walk to it
