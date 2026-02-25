@@ -321,12 +321,19 @@ function update() {
         // We set the origin so the "Totoro" part of the smash image aligns with the player body
         const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
         const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 100;
-        const newOriginX = (totoroWidth / 2) / smashWidth;
         
+        let newOriginX;
+        if (player.flipX) { // Facing LEFT
+            // When flipped, the origin point needs to be on the right side of the body to anchor it correctly.
+            newOriginX = (smashWidth - (totoroWidth / 2)) / smashWidth;
+        } else { // Facing RIGHT
+            // Anchor the left side of the body.
+            newOriginX = (totoroWidth / 2) / smashWidth;
+        }
         player.setOrigin(newOriginX, 0.5);
         player.anims.play('smash');
 
-        player.once('animationcomplete', () => {
+        player.once('animationcomplete-smash', () => {
             isSmashing = false;
             player.setOrigin(0.5, 0.5); // Reset to center
         });
