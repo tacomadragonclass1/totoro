@@ -68,10 +68,10 @@ function preload() {
     this.load.image('bg1', 'assets/background1.png');
     this.load.image('bg2', 'assets/background2.png');
     this.load.image('brickpath', 'assets/brickpath.png');
-    this.load.image('bubbleblock1', 'assets/bubbleblock1.png');
-    this.load.image('bubbleblock2', 'assets/bubbleblock2.png');
-    this.load.image('bubbleblock3', 'assets/bubbleblock3.png');
-    this.load.image('bubbleblock4', 'assets/bubbleblock4.png');
+    this.load.image('bubbleblock1', 'assets/bubbleblock1.png?v=2');
+    this.load.image('bubbleblock2', 'assets/bubbleblock2.png?v=2');
+    this.load.image('bubbleblock3', 'assets/bubbleblock3.png?v=2');
+    this.load.image('bubbleblock4', 'assets/bubbleblock4.png?v=2');
     this.load.image('platform', 'assets/platform.png');
 
     // // Load audio files (make sure you have jump.mp3 and hit.mp3 in your folder)
@@ -97,9 +97,17 @@ function preload() {
     this.load.audio('backgroundMusic', 'assets/backgroundmusic.mp3');
 
     // Load Target Word Audio (WAV files)
-    levels.forEach(level => {
-        this.load.audio(level.target, 'assets/' + level.target + '.wav');
-    });
+    // Explicitly load each file to ensure correct mapping and case sensitivity
+    this.load.audio('cat', 'assets/cat.wav');
+    this.load.audio('big', 'assets/big.wav');
+    this.load.audio('dog', 'assets/dog.wav');
+    this.load.audio('fox', 'assets/fox.wav');
+    this.load.audio('hop', 'assets/hop.wav');
+    this.load.audio('jam', 'assets/jam.wav');
+    this.load.audio('one', 'assets/one.wav');
+    this.load.audio('red', 'assets/red.wav');
+    this.load.audio('sky', 'assets/sky.wav');
+    this.load.audio('sun', 'assets/sun.wav');
 }
 
 // --- CREATE FUNCTION ---
@@ -490,7 +498,16 @@ function update() {
     // 6. Audio Trigger for Target Word
     if (!wordSpoken && player.x > audioTriggerX) {
         const data = levels[currentLevel % levels.length];
-        this.sound.play(data.target);
+        const soundKey = data.target.toLowerCase().trim();
+        
+        console.log(`Triggering sound for: ${soundKey} at x:${player.x}`);
+        
+        // Check cache instead of sound manager instance to ensure it plays the first time
+        if (this.cache.audio.exists(soundKey)) {
+            this.sound.play(soundKey);
+        } else {
+            console.warn(`Audio key '${soundKey}' not found in cache!`);
+        }
         wordSpoken = true;
     }
 }
@@ -639,9 +656,10 @@ function spawnLevel(index) {
     // Get data for the current level (loop back to 0 if we pass level 10)
     const data = levels[currentLevel % levels.length];
 
-    // Set audio trigger position (500px before the blocks)
-    audioTriggerX = blockXBase - 500;
+    // Set audio trigger position (700px before the blocks so it plays as you approach)
+    audioTriggerX = blockXBase - 700;
     wordSpoken = false;
+    console.log(`Spawning Level ${currentLevel}. Target: ${data.target}. Audio Trigger at: ${audioTriggerX}`);
 
     // Create 3 blocks
     // Position blocks relative to the calculated base (either ground or top platform)
