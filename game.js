@@ -11,6 +11,7 @@ const config = {
             debug: false         // Set to true to see collision boxes
         }
     },
+    parent: 'gameContainer', // Add this line to specify the parent element
     scene: {
         preload: preload,
         create: create,
@@ -43,6 +44,7 @@ let wordSpoken = true;
 let flowerEmitter;
 let ctrlKey;
 let isSmashing = false;
+let isDead = false;
 
 // --- LEVEL DATA ---
 // 10 Levels with a target word and 3 options for each
@@ -51,8 +53,8 @@ const levels = [
     { target: "DOG", options: ["DOG", "LOG", "FOG"] },
     { target: "SUN", options: ["RUN", "SUN", "FUN"] },
     { target: "RED", options: ["BED", "RED", "FED"] },
-    { target: "ONE", options: ["WON", "TON", "ONE"] },
-    { target: "BIG", options: ["PIG", "BIG", "DIG"] },
+    { target: "ONE", options: ["WUM", "TON", "ONE"] },
+    { target: "BIG", options: ["RIG", "BIG", "DIG"] },
     { target: "HOP", options: ["MOP", "TOP", "HOP"] },
     { target: "SKY", options: ["SKY", "FLY", "DRY"] },
     { target: "FOX", options: ["BOX", "FOX", "POX"] },
@@ -66,8 +68,10 @@ function preload() {
     this.load.image('bg1', 'assets/background1.png');
     this.load.image('bg2', 'assets/background2.png');
     this.load.image('brickpath', 'assets/brickpath.png');
-    this.load.image('wordblock', 'assets/wordblock.png');
-    this.load.image('wordblocksmash', 'assets/wordblocksmash.png');
+    this.load.image('bubbleblock1', 'assets/bubbleblock1.png');
+    this.load.image('bubbleblock2', 'assets/bubbleblock2.png');
+    this.load.image('bubbleblock3', 'assets/bubbleblock3.png');
+    this.load.image('bubbleblock4', 'assets/bubbleblock4.png');
     this.load.image('platform', 'assets/platform.png');
 
     // // Load audio files (make sure you have jump.mp3 and hit.mp3 in your folder)
@@ -88,6 +92,14 @@ function preload() {
     this.load.image('mike2', 'assets/mike2.png');
     this.load.image('mike3', 'assets/mike3.png');
     this.load.image('sootcoin', 'assets/sootcoin.png');
+
+    // Load Background Music
+    this.load.audio('backgroundMusic', 'assets/backgroundmusic.mp3');
+
+    // Load Target Word Audio (WAV files)
+    levels.forEach(level => {
+        this.load.audio(level.target, 'assets/' + level.target + '.wav');
+    });
 }
 
 // --- CREATE FUNCTION ---
@@ -99,6 +111,10 @@ function create() {
     // Reset score on game start/restart
     score = 0;
     isSmashing = false;
+    isDead = false;
+
+    // Randomize the level order
+    Phaser.Utils.Array.Shuffle(levels);
 
     // 1. Add Parallax Backgrounds
     // Get image dimensions to position them correctly
@@ -113,6 +129,12 @@ function create() {
     
     // BG2: Use actual image height, anchor to bottom so it sits on the ground
     bg2 = this.add.tileSprite(0, 600, 800, bg2Height, 'bg2').setOrigin(0, 1);
+
+     // Play Background Music
+     backgroundMusic = this.sound.add('backgroundMusic', { loop: true, volume: 1.0 });
+     backgroundMusic.play();
+
+     window.backgroundMusic = backgroundMusic;
 
     // FG: Brick path at the bottom, overlapping bg2
     fg = this.add.tileSprite(0, 600, 800, fgHeight, 'brickpath').setOrigin(0, 1);
@@ -248,16 +270,16 @@ function create() {
     levelText = this.add.text(16, 16, 'Level: 1', { fontSize: '32px', fill: '#000' });
     levelText.setScrollFactor(0); // Keep text fixed on screen
 
-    scoreText = this.add.text(config.width - 16, 16, 'Coins: 0', { 
+    scoreText = this.add.text(config.width - 16, 16, 'Soot Sprites: 0', { 
         fontSize: '32px', 
         fill: '#FFD700', 
         stroke: '#000', 
-        strokeThickness: 4 
+        strokeThickness: 4,
+        fontFamily: 'Arial' // Change to a simpler font
     });
     scoreText.setOrigin(1, 0); // Align right
     scoreText.setScrollFactor(0);
-
-    // 9. Start the first level
+    
     // 9. On-Screen Controls
     // Create textures for controls dynamically to avoid loading more images
     const controlGraphics = this.make.graphics();
@@ -303,9 +325,14 @@ function create() {
     spawnLevel.call(this, 0);
 }
 
+
+
 // --- UPDATE FUNCTION ---
 // Runs roughly 60 times per second to handle movement and logic
 function update() {
+    // If player is dead, stop updating game logic to prevent freezes/glitches
+    if (isDead) return;
+
     // 1. Parallax Scrolling
     // Move background texture based on camera position to create depth
     bg1.tilePositionX = this.cameras.main.scrollX * 0.3;
@@ -342,28 +369,35 @@ function update() {
     if (isSmashing) {
         // Smash Hit Detection
         const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
-        const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 100;
+        const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 105;
         const reach = smashWidth - totoroWidth;
         const hitRange = (totoroWidth / 2) + reach;
 
-        enemies.children.iterate((mike) => {
-            if (!mike.active) return;
+        const mikes = enemies.getChildren();
+        for (let i = 0; i < mikes.length; i++) {
+            const mike = mikes[i];
+            if (!mike || !mike.active) continue;
+
             // Check if Mike is close vertically
             if (Math.abs(mike.y - player.y) < 60) {
                 const dist = mike.x - player.x;
                 if (!player.flipX) { // Facing Right
                     if (dist > 0 && dist < hitRange) {
+                        const mx = mike.x;
+                        const my = mike.y;
                         mike.destroy();
-                        debrisEmitter.explode(30, mike.x, mike.y);
+                        debrisEmitter.explode(30, mx, my);
                     }
                 } else { // Facing Left
-                    if (dist < 0 && dist > -hitRange) {
+                    if (dist < 0 && dist > -(hitRange + 10)) {
+                        const mx = mike.x;
+                        const my = mike.y;
                         mike.destroy();
-                        debrisEmitter.explode(30, mike.x, mike.y);
+                        debrisEmitter.explode(30, mx, my);
                     }
                 }
             }
-        });
+        }
     } else {
         // 3. Player Movement (Keyboard) - Only if not smashing
         if (cursors.left.isDown || leftButtonPressed) {
@@ -389,7 +423,10 @@ function update() {
 
     // 4. Enemy Movement (Patrol and Respawn)
     const allMikes = enemies.getChildren();
-    enemies.children.iterate((mike) => {
+    for (let i = 0; i < allMikes.length; i++) {
+        const mike = allMikes[i];
+        if (!mike || !mike.active) continue;
+
         // PRIORITY 1: Check if Mike needs to be respawned.
         // A buffer of 100px ensures he is fully off-screen to the left.
         if (mike.x < this.cameras.main.scrollX - 100) {
@@ -422,15 +459,15 @@ function update() {
             mike.setFlipX(true);
         } else {
             // PRIORITY 2: If not respawning, do normal patrol logic.
-            if (mike.body.velocity.x < 0 && mike.x < mike.startX - 200) {
+            if (mike.body && mike.body.velocity.x < 0 && mike.x < mike.startX - 200) {
                 mike.setVelocityX(30);
                 mike.setFlipX(false); // Face right
-            } else if (mike.body.velocity.x > 0 && mike.x > mike.startX + 200) {
+            } else if (mike.body && mike.body.velocity.x > 0 && mike.x > mike.startX + 200) {
                 mike.setVelocityX(-30);
                 mike.setFlipX(true); // Face left
             }
         }
-    });
+    }
 
     // 5. Sootcoin Flee Logic
     sootCoins.children.iterate((coin) => {
@@ -453,7 +490,7 @@ function update() {
     // 6. Audio Trigger for Target Word
     if (!wordSpoken && player.x > audioTriggerX) {
         const data = levels[currentLevel % levels.length];
-        speak(data.target);
+        this.sound.play(data.target);
         wordSpoken = true;
     }
 }
@@ -614,7 +651,11 @@ function spawnLevel(index) {
         let x = positions[i];
         let y = blockY; // Use the calculated height
 
-        let block = wordBlocks.create(x, y, 'wordblock');
+        // Use bubbleblock1 and anchor to bottom so it grows upwards
+        const bHeight = this.textures.get('bubbleblock1').getSourceImage().height || 64;
+        let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
+        block.setOrigin(0.5, 1);
+        block.refreshBody(); // Ensure physics body matches the new anchor/position
         block.word = data.options[i]; // Store the word inside the block object
 
         // Add text on top of the block
@@ -642,11 +683,14 @@ function hitBlock(player, block) {
         
         if (block.word === data.target) {
             // CORRECT!
-            block.setTint(0xffff00); // Tint Bright Yellow
             block.body.enable = false;  // Disable block so it can't be hit again
             flowerEmitter.explode(30, block.x, block.y); // Flower burst
-            speak("Level Complete");
             
+            // Slow swapout animation
+            this.time.delayedCall(200, () => { block.setTexture('bubbleblock2'); });
+            this.time.delayedCall(400, () => { block.setTexture('bubbleblock3'); });
+            this.time.delayedCall(600, () => { block.setTexture('bubbleblock4'); });
+
             // Generate the next level immediately so player can walk to it
             spawnLevel.call(this, currentLevel + 1);
             
@@ -654,44 +698,56 @@ function hitBlock(player, block) {
             // INCORRECT!
             // Disable the block so it can't be hit again immediately
             block.body.enable = false;
-            // Hide the text that is on the block
-            if (block.textObject) {
-                block.textObject.setVisible(false);
-            }
             
-            // Change texture to the smashed version
-            block.setTexture('wordblocksmash');
+            // Darken by 80% (approx 20% brightness)
+            block.setTint(0x333333);
 
-            // Use our single, pre-made emitter to create a burst of particles.
-            // This is very fast and avoids creating new objects during gameplay.
-            debrisEmitter.explode(15, block.x, block.y);
-
-            // After 2 seconds, fade out and destroy the smashed block
-            this.time.delayedCall(2000, () => {
-                // Create a tween to fade the smashed block out
-                this.tweens.add({
-                    targets: block,
-                    alpha: 0,
-                    duration: 500, // 0.5 second fade-out time
-                    onComplete: () => {
-                        // Destroy the block and its text object to clean up
-                        if (block.textObject) {
-                            block.textObject.destroy();
-                        }
-                        block.destroy();
-                    }
-                });
+            // Fade out block and text
+            this.tweens.add({
+                targets: [block, block.textObject],
+                alpha: 0,
+                duration: 1000
             });
+
+            // Reset coins collected to zero and animate them flying away
+            if (score > 0) {
+                const coinsToShow = Math.min(score, 20); // Cap visual coins at 20
+                for (let i = 0; i < coinsToShow; i++) {
+                    let coin = this.add.image(config.width / 2, 100, 'sootcoin').setScrollFactor(0).setScale(0.7);
+                    this.tweens.add({
+                        targets: coin,
+                        x: -100, // Fly off screen left
+                        duration: Phaser.Math.Between(500, 1000),
+                        onComplete: () => coin.destroy()
+                    });
+                }
+                score = 0;
+                scoreText.setText('Soot Sprites: ' + score);
+            }
         }
     }
 }
 
 // Function called when player touches Mike
 function hitEnemy(player, enemy) {
+    // If we are already in the process of dying, do nothing.
+    if (isDead) {
+        return;
+    }
+    // Safety check to ensure physics system is still available
+    if (!this.physics) return;
+
+    isDead = true; // Set the flag to prevent this from being called again.
+
     this.physics.pause(); // Stop the game
     player.setTint(0xff0000); // Turn red
     player.anims.play('idle');
     
+    // Stop music immediately
+    if (window.backgroundMusic) {
+        window.backgroundMusic.stop();
+    }
+
     // Restart game after 1 second
     this.time.delayedCall(1000, () => {
         currentLevel = 0;
@@ -704,7 +760,7 @@ function collectCoin(player, coin) {
     coin.destroy();
     playCoinSound();
     score += 1;
-    scoreText.setText('Coins: ' + score);
+    scoreText.setText('Soot Sprites: ' + score);
 }
 
 // Function to use browser Text-to-Speech
