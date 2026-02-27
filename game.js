@@ -68,10 +68,10 @@ function preload() {
     this.load.image('bg1', 'assets/background1.png');
     this.load.image('bg2', 'assets/background2.png');
     this.load.image('brickpath', 'assets/brickpath.png');
-    this.load.image('bubbleblock1', 'assets/bubbleblock1.png?v=2');
-    this.load.image('bubbleblock2', 'assets/bubbleblock2.png?v=2');
-    this.load.image('bubbleblock3', 'assets/bubbleblock3.png?v=2');
-    this.load.image('bubbleblock4', 'assets/bubbleblock4.png?v=2');
+    this.load.image('bubbleblock1', 'assets/bubbleblock1.png');
+    this.load.image('bubbleblock2', 'assets/bubbleblock2.png');
+    this.load.image('bubbleblock3', 'assets/bubbleblock3.png');
+    this.load.image('bubbleblock4', 'assets/bubbleblock4.png');
     this.load.image('platform', 'assets/platform.png');
 
     // // Load audio files (make sure you have jump.mp3 and hit.mp3 in your folder)
@@ -98,7 +98,7 @@ function preload() {
 
     // Load Target Word Audio (WAV files)
     // Explicitly load each file to ensure correct mapping and case sensitivity
-    this.load.audio('cat', 'assets/cat.wav');
+    this.load.audio('cat', 'assets/CAT.wav');
     this.load.audio('big', 'assets/big.wav');
     this.load.audio('dog', 'assets/dog.wav');
     this.load.audio('fox', 'assets/fox.wav');
