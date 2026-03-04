@@ -2,9 +2,9 @@
 // This object tells Phaser how to set up the game.
 const config = {
     type: Phaser.AUTO, // Automatically choose WebGL or Canvas
-    width: 800,        // Game width
+    width: 960,        // Game width (800 * 1.2)
     height: 600,       // Game height
-    physics: {
+   physics: {
         default: 'arcade', // Use the simple Arcade Physics system
         arcade: {
             gravity: { y: 600 }, // Vertical gravity pulling down
@@ -32,8 +32,6 @@ let textGroup;
 let bg1, bg2, fg, debrisEmitter;
 let currentLevel = 0;
 let levelText;
-let leftButtonPressed = false;
-let rightButtonPressed = false;
 let enemies;
 let sootCoins;
 let score = 0;
@@ -42,6 +40,7 @@ let audioCtx;
 let audioTriggerX = 0;
 let wordSpoken = true;
 let flowerEmitter;
+let sparkleEmitter;
 let ctrlKey;
 let isSmashing = false;
 let isDead = false;
@@ -121,6 +120,18 @@ function create() {
     isSmashing = false;
     isDead = false;
 
+    // Expose functions and flags for external UI
+    window.leftButtonPressed = false;
+    window.rightButtonPressed = false;
+    window.smashButtonPressed = false;
+
+    window.triggerJump = () => {
+        if (player && (player.body.touching.down || player.body.blocked.down)) {
+            player.setVelocityY(-440);
+            playJumpSound();
+        }
+    };
+
     // Randomize the level order
     Phaser.Utils.Array.Shuffle(levels);
 
@@ -132,11 +143,11 @@ function create() {
 
     // BG1: Scale to fit height, anchor to bottom
     const bgScale = 600 / bg1Height;
-    bg1 = this.add.tileSprite(0, 600, 800, 600, 'bg1').setOrigin(0, 1);
+    bg1 = this.add.tileSprite(0, 600, config.width, 600, 'bg1').setOrigin(0, 1);
     bg1.setTileScale(bgScale);
     
     // BG2: Use actual image height, anchor to bottom so it sits on the ground
-    bg2 = this.add.tileSprite(0, 600, 800, bg2Height, 'bg2').setOrigin(0, 1);
+    bg2 = this.add.tileSprite(0, 600, config.width, bg2Height, 'bg2').setOrigin(0, 1);
 
      // Play Background Music
      backgroundMusic = this.sound.add('backgroundMusic', { loop: true, volume: 1.0 });
@@ -145,7 +156,7 @@ function create() {
      window.backgroundMusic = backgroundMusic;
 
     // FG: Brick path at the bottom, overlapping bg2
-    fg = this.add.tileSprite(0, 600, 800, fgHeight, 'brickpath').setOrigin(0, 1);
+    fg = this.add.tileSprite(0, 600, config.width, fgHeight, 'brickpath').setOrigin(0, 1);
     
     // Fix backgrounds to the camera so they don't scroll away; we will scroll their texture instead
     bg1.setScrollFactor(0);
@@ -185,6 +196,21 @@ function create() {
         scale: { start: 1, end: 0 },
         lifespan: 1000,
         gravityY: 200,
+        emitting: false
+    });
+
+    // Create a texture for sparkle particles (white/yellow)
+    const sparkleGraphics = this.make.graphics();
+    sparkleGraphics.fillStyle(0xFFFFE0, 1); // Light yellow
+    sparkleGraphics.fillRect(0, 0, 6, 6);
+    sparkleGraphics.generateTexture('sparkle', 6, 6);
+    sparkleGraphics.destroy();
+
+    sparkleEmitter = this.add.particles(0, 0, 'sparkle', {
+        speed: { min: 100, max: 250 },
+        scale: { start: 1, end: 0 },
+        lifespan: 300,
+        blendMode: 'ADD',
         emitting: false
     });
 
@@ -242,8 +268,14 @@ function create() {
     // 4. Camera Setup
     // Camera follows the player
     // Set bounds to 3000px (approx 3.75 screens) to allow walking
-    this.physics.world.setBounds(0, 0, 3000, 600);
-    this.cameras.main.setBounds(0, 0, 3000, 600);
+   
+    // Set world bounds to allow camera to scroll up
+    this.physics.world.setBounds(0, 0, 3000, 2000); // Increased height
+    this.cameras.main.setBounds(0, 0, 3000, 2000); // Increased height
+
+    // Set camera to follow player, with a slight vertical offset
+    this.cameras.main.startFollow(player, false, 0.5, 0.5, 0, 150);
+
     this.cameras.main.startFollow(player);
 
     // 5. Inputs
@@ -288,47 +320,6 @@ function create() {
     scoreText.setOrigin(1, 0); // Align right
     scoreText.setScrollFactor(0);
     
-    // 9. On-Screen Controls
-    // Create textures for controls dynamically to avoid loading more images
-    const controlGraphics = this.make.graphics();
-    // Arrow Button Texture
-    controlGraphics.fillStyle(0x000000, 0.3); // Black, 30% transparent
-    controlGraphics.fillTriangle(0, 25, 50, 0, 50, 50);
-    controlGraphics.generateTexture('arrowBtn', 50, 50);
-    
-    // Clear the graphics object before drawing the next shape
-    controlGraphics.clear();
-
-    // Jump Button Texture
-    controlGraphics.fillStyle(0x000000, 0.3);
-    controlGraphics.fillCircle(35, 35, 35);
-    controlGraphics.generateTexture('jumpBtn', 70, 70);
-    controlGraphics.destroy();
-
-    // Add button sprites to the screen
-    const jumpButton = this.add.sprite(config.width - 220, config.height - 70, 'jumpBtn').setInteractive().setScrollFactor(0);
-    const leftButton = this.add.sprite(config.width - 140, config.height - 70, 'arrowBtn').setInteractive().setScrollFactor(0);
-    const rightButton = this.add.sprite(config.width - 60, config.height - 70, 'arrowBtn').setInteractive().setScrollFactor(0);
-    
-    rightButton.flipX = true; // Flip the right arrow to point right
-
-    // Input events for Left Button
-    leftButton.on('pointerdown', () => { leftButtonPressed = true; });
-    leftButton.on('pointerup', () => { leftButtonPressed = false; });
-    leftButton.on('pointerout', () => { leftButtonPressed = false; }); // Stop if pointer leaves button
-
-    // Input events for Right Button
-    rightButton.on('pointerdown', () => { rightButtonPressed = true; });
-    rightButton.on('pointerup', () => { rightButtonPressed = false; });
-    rightButton.on('pointerout', () => { rightButtonPressed = false; }); // Stop if pointer leaves button
-
-    // Input event for Jump Button
-    jumpButton.on('pointerdown', () => {
-        if (player.body.touching.down || player.body.blocked.down) {
-            player.setVelocityY(-440);
-        }
-    });
-
     // 10. Start the first level
     spawnLevel.call(this, 0);
 }
@@ -348,7 +339,7 @@ function update() {
     fg.tilePositionX = this.cameras.main.scrollX;
 
     // 2. Smash Attack
-    if (ctrlKey.isDown && !isSmashing) {
+    if ((ctrlKey.isDown || window.smashButtonPressed) && !isSmashing) {
         isSmashing = true;
         player.setVelocityX(0);
 
@@ -368,6 +359,9 @@ function update() {
         player.setOrigin(newOriginX, 0.5);
         player.anims.play('smash');
 
+        // Reset button flag so it only triggers once per press
+        if (window.smashButtonPressed) window.smashButtonPressed = false;
+
         player.once('animationcomplete-smash', () => {
             isSmashing = false;
             player.setOrigin(0.5, 0.5); // Reset to center
@@ -379,7 +373,7 @@ function update() {
         const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
         const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 105;
         const reach = smashWidth - totoroWidth;
-        const hitRange = (totoroWidth / 2) + reach;
+        const hitRange = (totoroWidth / 2) + reach + 15; // Extend 15 pixels beyond graphic
 
         const mikes = enemies.getChildren();
         for (let i = 0; i < mikes.length; i++) {
@@ -395,6 +389,7 @@ function update() {
                         const my = mike.y;
                         mike.destroy();
                         debrisEmitter.explode(30, mx, my);
+                        sparkleEmitter.explode(15, player.x + hitRange, player.y); // Sparkle at end of strike
                     }
                 } else { // Facing Left
                     if (dist < 0 && dist > -(hitRange + 10)) {
@@ -402,17 +397,18 @@ function update() {
                         const my = mike.y;
                         mike.destroy();
                         debrisEmitter.explode(30, mx, my);
+                        sparkleEmitter.explode(15, player.x - hitRange, player.y); // Sparkle at end of strike
                     }
                 }
             }
         }
     } else {
         // 3. Player Movement (Keyboard) - Only if not smashing
-        if (cursors.left.isDown || leftButtonPressed) {
+        if (cursors.left.isDown || window.leftButtonPressed) {
             player.setVelocityX(-160);
             player.anims.play('run', true);
             player.setFlipX(true); // Flip sprite to face left
-        } else if (cursors.right.isDown || rightButtonPressed) {
+        } else if (cursors.right.isDown || window.rightButtonPressed) {
             player.setVelocityX(160);
             player.anims.play('run', true);
             player.setFlipX(false); // Default face right
@@ -424,6 +420,7 @@ function update() {
         // 4. Jump (Spacebar)
         if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
             player.setVelocityY(-440);
+            playJumpSound();
         }
     }
 
@@ -523,16 +520,16 @@ function spawnLevel(index) {
     // Each level is 3000px wide. Level 0 starts at 0, Level 1 at 3000, etc.
     const startX = currentLevel * 2400; // Increased distance between levels
 
-    // Expand the world and camera bounds to include the new level area
-    const newMaxX = startX + 2400;
-    this.physics.world.setBounds(0, 0, newMaxX, 600);
-    this.cameras.main.setBounds(0, 0, newMaxX, 600);
+   // Expand the world and camera bounds to include the new level area
+   const newMaxX = startX + 2400;
+    this.physics.world.setBounds(0, 0, newMaxX, config.height);
+    this.cameras.main.setBounds(0, 0, newMaxX, config.height);
 
     // Add a new floor segment for this level
     // Get height of brickpath to align floor collision exactly with the visual
     const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
     // Position floor so it matches the brickpath height at the bottom of the screen
-    let floor = this.add.rectangle(startX + 1500, 600 - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
+    let floor = this.add.rectangle(startX + 1500, config.height - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
     floor.setVisible(false);
     this.physics.add.existing(floor, true);
     floors.add(floor);
@@ -570,57 +567,123 @@ function spawnLevel(index) {
         jumpX += Phaser.Math.Between(120, 160);
     }
 
-    // --- PLATFORM GENERATION ---
-    // Determine number of platforms based on level (Level 1 = 0, Level 2 = 1, etc.)
-    // We cap at 4 platforms to ensure they fit comfortably on the screen.
-    const numPlatforms = Math.min(currentLevel, 4);
+    // Get data for the current level (loop back to 0 if we pass level 10)
+    const data = levels[currentLevel % levels.length];
 
-    // Default positions for blocks (used for Level 1 when there are no platforms)
-    let blockY = 350; 
-    let blockXBase = startX + 1800;
+    // --- PLATFORM & BLOCK GENERATION ---
+    if (currentLevel < 3) {
+        // --- Levels 1-3: Staircase to one wide platform ---
+        const numPlatforms = Math.min(currentLevel, 4);
+        let blockY = 350;
+        let blockXBase = startX + 1800;
 
-    if (numPlatforms > 0) {
-        let platX = startX + 1000; // Start placing platforms here
-        let platY = 500;           // Start height (100px above ground)
+        if (numPlatforms > 0) {
+            let platX = startX + 1000;
+            let platY = 500;
 
-        for (let i = 0; i < numPlatforms; i++) {
-            // Determine if this is the final platform
-            const isFinalPlatform = (i === numPlatforms - 1);
+            for (let i = 0; i < numPlatforms; i++) {
+                const isFinalPlatform = (i === numPlatforms - 1);
+                const platWidth = isFinalPlatform ? 600 : 200;
+                const currentPlatX = isFinalPlatform ? platX + 200 : platX;
+
+                let platform = platforms.create(currentPlatX, platY, 'platform');
+                platform.setDisplaySize(platWidth, 40).refreshBody();
+                platform.body.checkCollision.down = false;
+                platform.body.checkCollision.left = false;
+                platform.body.checkCollision.right = false;
+
+                if (Phaser.Math.Between(0, 100) < 80) {
+                    let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
+                    coin.setScale(0.7);
+                }
+
+                if (isFinalPlatform) {
+                    blockY = platY - 190; // Position blocks a jumpable height above the platform
+                    blockXBase = platX;
+                }
+
+                platX += 250;
+                platY -= 90;
+            }
+        }
+
+        // Create 3 blocks on the single platform (or ground for level 1)
+        const positions = [blockXBase, blockXBase + 200, blockXBase + 400];
+        for (let i = 0; i < 3; i++) {
+            let x = positions[i];
+            let y = blockY;
+
+            const bHeight = this.textures.get('bubbleblock1').getSourceImage().height || 64;
+            let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
+            block.setOrigin(0.5, 1).refreshBody();
+            block.word = data.options[i];
+
+            let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
+            text.setOrigin(0.5);
+            textGroup.add(text);
+            block.textObject = text;
+        }
+
+        audioTriggerX = blockXBase - 700;
+
+    } else {
+        // --- Levels 4+: Three separate platforms for blocks ---
+
+        // Lead-up platforms to get to the block area
+        let leadUpPlatX = startX + 1000;
+        let leadUpPlatY = 480;
+        for (let i = 0; i < 2; i++) {
+            let p = platforms.create(leadUpPlatX, leadUpPlatY, 'platform');
+            p.setDisplaySize(150, 40).refreshBody();
+            p.body.checkCollision.down = false;
+            p.body.checkCollision.left = false;
+            p.body.checkCollision.right = false;
+            if (Phaser.Math.Between(0, 100) < 80) {
+                sootCoins.create(leadUpPlatX, leadUpPlatY - 50, 'sootcoin').setScale(0.7);
+            }
+            leadUpPlatX += 250;
+            leadUpPlatY -= 100;
+        }
+
+        // Define positions for the three word-platforms and shuffle them
+        const blockPlatformPositions = [
+            { x: startX + 1500, y: 420 },
+            { x: startX + 1800, y: 320 },
+            { x: startX + 2100, y: 420 }
+        ];
+        Phaser.Utils.Array.Shuffle(blockPlatformPositions);
+
+        // Create the platforms and place a block on each
+        for (let i = 0; i < 3; i++) {
+            const pos = blockPlatformPositions[i];
             
-            // Final platform is wider (600px) to span all 3 blocks, others are 200px
-            const platWidth = isFinalPlatform ? 600 : 200;
-            
-            // Shift the final platform to the right so it centers under the blocks
-            // Normal platforms are centered at platX. Final is centered at platX + 200.
-            const currentPlatX = isFinalPlatform ? platX + 200 : platX;
-
-            // Create a platform from an image
-            let platform = platforms.create(currentPlatX, platY, 'platform');
-            platform.setDisplaySize(platWidth, 40);
-            platform.refreshBody(); // Refresh physics body after resize
-
-            // One-way collision: Only collide from top
+            let platform = platforms.create(pos.x, pos.y, 'platform');
+            platform.setDisplaySize(200, 40).refreshBody();
             platform.body.checkCollision.down = false;
             platform.body.checkCollision.left = false;
             platform.body.checkCollision.right = false;
 
-            // Chance to spawn a Sootcoin on the platform (80% chance)
-            if (Phaser.Math.Between(0, 100) < 80) {
-                let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
-                coin.setScale(0.7);
-            }
+            // Place block on this platform
+            let x = pos.x;
+            let y = pos.y - 190; // Position block a jumpable height above the platform
 
-            // If this is the highest platform in the sequence, place the word blocks above it
-            if (isFinalPlatform) {
-                blockY = platY - 220; // Place blocks higher up (was 150)
-                blockXBase = platX;   // Align blocks horizontally with this platform
-            }
+            const bHeight = this.textures.get('bubbleblock1').getSourceImage().height || 64;
+            let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
+            block.setOrigin(0.5, 1).refreshBody();
+            block.word = data.options[i];
 
-            // Calculate position for the next platform (step up and to the right)
-            platX += 250; 
-            platY -= 90;
+            let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
+            text.setOrigin(0.5);
+            textGroup.add(text);
+            block.textObject = text;
         }
+        
+        // Set audio trigger based on the start of the block platform area
+        audioTriggerX = startX + 1500 - 700;
     }
+
+    wordSpoken = false;
+    console.log(`Spawning Level ${currentLevel}. Target: ${data.target}. Audio Trigger at: ${audioTriggerX}`);
 
     // --- SPAWN GROUND COINS ---
     // Only place coins on the ground in the "empty space" between levels (start of segment)
@@ -652,49 +715,13 @@ function spawnLevel(index) {
         mike.setFlipX(true);
         mike.anims.play('mikeWalk');
     }
-
-    // Get data for the current level (loop back to 0 if we pass level 10)
-    const data = levels[currentLevel % levels.length];
-
-    // Set audio trigger position (700px before the blocks so it plays as you approach)
-    audioTriggerX = blockXBase - 700;
-    wordSpoken = false;
-    console.log(`Spawning Level ${currentLevel}. Target: ${data.target}. Audio Trigger at: ${audioTriggerX}`);
-
-    // Create 3 blocks
-    // Position blocks relative to the calculated base (either ground or top platform)
-    const positions = [blockXBase, blockXBase + 200, blockXBase + 400];
-    
-    for (let i = 0; i < 3; i++) {
-        let x = positions[i];
-        let y = blockY; // Use the calculated height
-
-        // Use bubbleblock1 and anchor to bottom so it grows upwards
-        const bHeight = this.textures.get('bubbleblock1').getSourceImage().height || 64;
-        let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
-        block.setOrigin(0.5, 1);
-        block.refreshBody(); // Ensure physics body matches the new anchor/position
-        block.word = data.options[i]; // Store the word inside the block object
-
-        // Add text on top of the block
-        let text = this.add.text(x, y, data.options[i], { 
-            fontSize: '24px', 
-            fill: '#ffffff',
-            fontStyle: 'bold'
-        });
-        text.setOrigin(0.5); // Center text
-        textGroup.add(text);
-
-        // Link the block to its text object so we can hide/show it during the smash animation
-        block.textObject = text;
-    }
 }
 
 // Function called when player touches a block
 function hitBlock(player, block) {
     // Only trigger if player hits the BOTTOM of the block (jumping up)
     if (player.body.touching.up && block.body.touching.down) {
-        
+       
         // try { this.sound.play('hitSound'); } catch (e) {}
 
         const data = levels[currentLevel % levels.length];
@@ -820,4 +847,34 @@ function playCoinSound() {
 
     osc.start();
     osc.stop(audioCtx.currentTime + 0.1);
+}
+
+// Function to generate a jump sound (Low volume)
+function playJumpSound() {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) audioCtx = new AudioContext();
+    }
+    if (!audioCtx) return;
+
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+    osc.frequency.linearRampToValueAtTime(400, audioCtx.currentTime + 0.15);
+
+    // Low volume
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 0.15);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
 }

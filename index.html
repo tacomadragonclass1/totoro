@@ -7,16 +7,27 @@
     <style>
         body {
             margin: 0;
+            padding-top: 6px;
             display: flex;
-            justify-content: center;
             flex-direction: column;
             align-items: center;
-            height: 100vh;
+            height: calc(100vh - 6px); /* Adjust height for padding */
             background-color: #2d2d2d;          
         }
 
         #gameContainer {
             margin-bottom: 20px; /* Add some space between the game and the buttons */
+        }
+
+        button {
+            background-color: #f0f0f0;
+            color: #333;
+            border: 1px solid #ccc;
+            padding: 8px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            margin: 0 4px;
+            border-radius: 20px;
         }
     </style>
     <!-- Load Phaser 3 from a CDN (Content Delivery Network) -->
@@ -24,10 +35,20 @@
 </head>
 <body>
     <!-- Your game code will run here -->
-    <div>
+    <div style="width: 960px;">
       <div id="gameContainer"></div>
-        <button id="musicButton">Music On/Off</button>
-        <button id="restartButton">Restart</button>
+      <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+          <div id="gameControls">
+              <button id="leftCtrl">Left</button>
+              <button id="rightCtrl">Right</button>
+              <button id="jumpCtrl">Jump</button>
+              <button id="smashCtrl">Bag</button>
+          </div>
+          <div>
+              <button id="musicButton">Music On/Off</button>
+              <button id="restartButton">Restart</button>
+          </div>
+      </div>
     </div>
     
     <script src="game.js"></script>
