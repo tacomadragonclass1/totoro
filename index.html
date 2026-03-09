@@ -15,6 +15,19 @@
             background-color: #2d2d2d;          
         }
 
+        #frame {
+            width: 1152px;
+            margin-top: 32px;
+        }
+
+        #titleHeader {
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
         #gameContainer {
             margin-bottom: 20px; /* Add some space between the game and the buttons */
         }
@@ -35,7 +48,8 @@
 </head>
 <body>
     <!-- Your game code will run here -->
-    <div style="width: 960px;">
+    <div id="frame">
+      <div id="titleHeader"></div>
       <div id="gameContainer"></div>
       <div style="display: flex; justify-content: space-between; margin-top: 10px;">
           <div id="gameControls">

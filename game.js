@@ -1,17 +1,17 @@
 // --- CONFIGURATION ---
-// This object tells Phaser how to set up the game.
 const config = {
-    type: Phaser.AUTO, // Automatically choose WebGL or Canvas
-    width: 960,        // Game width (800 * 1.2)
-    height: 600,       // Game height
-   physics: {
-        default: 'arcade', // Use the simple Arcade Physics system
+    type: Phaser.AUTO,
+    width: 1152,
+    height: 600,
+    backgroundColor: '#87CEEB', // pale blue — visible above bg1 when camera scrolls up
+    physics: {
+        default: 'arcade',
         arcade: {
-            gravity: { y: 600 }, // Vertical gravity pulling down
-            debug: false         // Set to true to see collision boxes
+            gravity: { y: 600 },
+            debug: false
         }
     },
-    parent: 'gameContainer', // Add this line to specify the parent element
+    parent: 'gameContainer',
     scene: {
         preload: preload,
         create: create,
@@ -19,7 +19,6 @@ const config = {
     }
 };
 
-// Initialize the game with the config
 const game = new Phaser.Game(config);
 
 // --- GLOBAL VARIABLES ---
@@ -29,7 +28,8 @@ let platforms;
 let floors;
 let wordBlocks;
 let textGroup;
-let bg1, bg2, fg, debrisEmitter;
+let bg1, bg2, fg;
+let debrisEmitter;
 let currentLevel = 0;
 let levelText;
 let enemies;
@@ -44,9 +44,18 @@ let sparkleEmitter;
 let ctrlKey;
 let isSmashing = false;
 let isDead = false;
+let backgroundMusic;
+let activeLevels;
+let levelObjectsMap = {};
+let worldTopExtent = 800;
+let activeCastle = null;
+let pendingCastleStartX = null;
+const skyCastleParallaxX = 0.34;
+const skyCastleParallaxY = 1;
+const skyCastleBaseXInLevel = 900;
+const skyCastleBaseY = -220;
 
 // --- LEVEL DATA ---
-// 10 Levels with a target word and 3 options for each
 const levels = [
     { target: "CAT", options: ["BAT", "CAT", "RAT"] },
     { target: "DOG", options: ["DOG", "LOG", "FOG"] },
@@ -61,9 +70,7 @@ const levels = [
 ];
 
 // --- PRELOAD FUNCTION ---
-// Load all images and assets before the game starts
 function preload() {
-    // Load Backgrounds
     this.load.image('bg1', 'assets/background1.png');
     this.load.image('bg2', 'assets/background2.png');
     this.load.image('brickpath', 'assets/brickpath.png');
@@ -72,13 +79,8 @@ function preload() {
     this.load.image('bubbleblock3', 'assets/bubbleblock3.png');
     this.load.image('bubbleblock4', 'assets/bubbleblock4.png');
     this.load.image('platform', 'assets/platform.png');
+    this.load.image('skycastle', 'assets/skycastle.png');
 
-    // // Load audio files (make sure you have jump.mp3 and hit.mp3 in your folder)
-    // this.load.audio('jumpSound', 'jump.mp3');
-    // this.load.audio('hitSound', 'assets/hit.mp3');
-    // this.load.audio('coinSound', 'assets/coin.mp3');
-
-    // Load Totoro Sprites (Frames for animation)
     this.load.image('totoro1', 'assets/totoro1.png');
     this.load.image('totoro2', 'assets/totoro2.png');
     this.load.image('totoro3', 'assets/totoro3.png');
@@ -86,17 +88,13 @@ function preload() {
     this.load.image('totorosmash1', 'assets/totorosmash1.png');
     this.load.image('totorosmash2', 'assets/totorosmash2.png');
 
-    // Load Mike (Bad Guy)
     this.load.image('mike1', 'assets/mike1.png');
     this.load.image('mike2', 'assets/mike2.png');
     this.load.image('mike3', 'assets/mike3.png');
     this.load.image('sootcoin', 'assets/sootcoin.png');
 
-    // Load Background Music
     this.load.audio('backgroundMusic', 'assets/backgroundmusic.mp3');
 
-    // Load Target Word Audio (WAV files)
-    // Explicitly load each file to ensure correct mapping and case sensitivity
     this.load.audio('cat', 'assets/CAT.wav');
     this.load.audio('big', 'assets/big.wav');
     this.load.audio('dog', 'assets/dog.wav');
@@ -110,17 +108,14 @@ function preload() {
 }
 
 // --- CREATE FUNCTION ---
-// Set up the game world, objects, and inputs
-
-
-
 function create() {
-    // Reset score on game start/restart
     score = 0;
     isSmashing = false;
     isDead = false;
+    levelObjectsMap = {};
+    activeCastle = null;
+    pendingCastleStartX = null;
 
-    // Expose functions and flags for external UI
     window.leftButtonPressed = false;
     window.rightButtonPressed = false;
     window.smashButtonPressed = false;
@@ -132,60 +127,65 @@ function create() {
         }
     };
 
-    // Randomize the level order
-    Phaser.Utils.Array.Shuffle(levels);
+    // Shuffle a copy so the original array is never mutated
+    activeLevels = Phaser.Utils.Array.Shuffle([...levels]);
 
     // 1. Add Parallax Backgrounds
-    // Get image dimensions to position them correctly
-    const bg1Height = this.textures.get('bg1').getSourceImage().height || 600;
+    const bg1Source = this.textures.get('bg1').getSourceImage();
+    const bg1Width = bg1Source.width || config.width;
+    const bg1Height = bg1Source.height || config.height;
     const bg2Height = this.textures.get('bg2').getSourceImage().height || 600;
     const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
 
-    // BG1: Scale to fit height, anchor to bottom
-    const bgScale = 600 / bg1Height;
-    bg1 = this.add.tileSprite(0, 600, config.width, 600, 'bg1').setOrigin(0, 1);
+    // bg1 (sky): use a single vertically non-repeating slice by matching tileSprite height
+    // to exactly one scaled texture height, then bottom-align it to ground level.
+    // Keep horizontal tiling for long side-scrolling levels.
+    const bgScale = config.width / bg1Width;
+    const bg1ScaledHeight = bg1Height * bgScale;
+    bg1 = this.add.tileSprite(0, config.height, 30000, bg1ScaledHeight, 'bg1').setOrigin(0, 1);
     bg1.setTileScale(bgScale);
-    
-    // BG2: Use actual image height, anchor to bottom so it sits on the ground
-    bg2 = this.add.tileSprite(0, 600, config.width, bg2Height, 'bg2').setOrigin(0, 1);
+    bg1.setScrollFactor(0.3, 1);
+    bg1.setDepth(-30);
 
-     // Play Background Music
-     backgroundMusic = this.sound.add('backgroundMusic', { loop: true, volume: 1.0 });
-     backgroundMusic.play();
+    // Keep at least the original 800px jump space, but expand if bg1 has more headroom.
+    worldTopExtent = Math.max(1200, Math.floor(bg1ScaledHeight - config.height));
 
-     window.backgroundMusic = backgroundMusic;
+    // bg2 (terrain silhouette): world-space, anchored to the bottom of the game area.
+    // Scrolls off the bottom of the screen as the camera moves up.
+    bg2 = this.add.tileSprite(0, config.height, 30000, bg2Height, 'bg2').setOrigin(0, 1);
+    bg2.setScrollFactor(0.7, 1);
+    bg2.setDepth(-10);
 
-    // FG: Brick path at the bottom, overlapping bg2
-    fg = this.add.tileSprite(0, 600, config.width, fgHeight, 'brickpath').setOrigin(0, 1);
-    
-    // Fix backgrounds to the camera so they don't scroll away; we will scroll their texture instead
-    bg1.setScrollFactor(0);
-    bg2.setScrollFactor(0);
-    fg.setScrollFactor(0);
+    // fg (brickpath): world-space at ground level. Naturally scrolls off the bottom
+    // of the screen when the camera moves up to show higher platforms.
+    fg = this.add.tileSprite(0, config.height - fgHeight / 2, 30000, fgHeight, 'brickpath').setOrigin(0, 0.5);
+    fg.setDepth(-5);
 
-    // Dynamically create a small brown texture for debris particles, so we don't need another image file
+    // Play Background Music
+    backgroundMusic = this.sound.add('backgroundMusic', { loop: true, volume: 0.5 });
+    backgroundMusic.play();
+    window.backgroundMusic = backgroundMusic;
+
+    // Dynamically generate particle textures
     const graphics = this.make.graphics();
-    graphics.fillStyle(0x8B4513, 1); // Brown color
+    graphics.fillStyle(0x8B4513, 1);
     graphics.fillRect(0, 0, 8, 8);
     graphics.generateTexture('debris', 8, 8);
     graphics.destroy();
 
-    // Create a single, reusable particle emitter. This is the most performant way.
-    // We will move this emitter to the block's position and tell it to explode
     debrisEmitter = this.add.particles(0, 0, 'debris', {
         speed: { min: 50, max: 200 },
         angle: { min: 45, max: 135 },
         scale: { start: 1, end: 0 },
         lifespan: 800,
         gravityY: 300,
-        emitting: false // IMPORTANT: Start the emitter turned off
+        emitting: false
     });
 
-    // Create a texture for flower particles
     const flowerGraphics = this.make.graphics();
-    flowerGraphics.fillStyle(0xFF69B4, 1); // HotPink
+    flowerGraphics.fillStyle(0xFF69B4, 1);
     flowerGraphics.fillCircle(5, 5, 5);
-    flowerGraphics.fillStyle(0xFFFF00, 1); // Yellow center
+    flowerGraphics.fillStyle(0xFFFF00, 1);
     flowerGraphics.fillCircle(5, 5, 2);
     flowerGraphics.generateTexture('flower', 10, 10);
     flowerGraphics.destroy();
@@ -199,9 +199,8 @@ function create() {
         emitting: false
     });
 
-    // Create a texture for sparkle particles (white/yellow)
     const sparkleGraphics = this.make.graphics();
-    sparkleGraphics.fillStyle(0xFFFFE0, 1); // Light yellow
+    sparkleGraphics.fillStyle(0xFFFFE0, 1);
     sparkleGraphics.fillRect(0, 0, 6, 6);
     sparkleGraphics.generateTexture('sparkle', 6, 6);
     sparkleGraphics.destroy();
@@ -223,7 +222,7 @@ function create() {
             { key: 'totoro4' }
         ],
         frameRate: 10,
-        repeat: -1 // Loop forever
+        repeat: -1
     });
 
     this.anims.create({
@@ -240,7 +239,7 @@ function create() {
             { key: 'mike3' },
             { key: 'mike2' }
         ],
-        frameRate: 4, // Slow walk
+        frameRate: 4,
         repeat: -1
     });
 
@@ -257,48 +256,39 @@ function create() {
 
     // 3. Create Player (Totoro)
     player = this.physics.add.sprite(100, 455, 'totoro1');
-    player.setBounce(0.1); // Slight bounce when hitting ground
-    player.setCollideWorldBounds(true); // Keep inside the world
-
-    // Adjust the physics body to be smaller and lower, to match the visual feet.
-    // This prevents the "hovering" look.
-    // setSize(width, height) and setOffset(x_from_left, y_from_top)
+    player.setBounce(0.1);
+    player.setCollideWorldBounds(true);
     player.body.setSize(50, 60).setOffset(7, 20);
-    
-    // 4. Camera Setup
-    // Camera follows the player
-    // Set bounds to 3000px (approx 3.75 screens) to allow walking
-   
-    // Set world bounds to allow camera to scroll up
-    this.physics.world.setBounds(0, 0, 3000, 2000); // Increased height
-    this.cameras.main.setBounds(0, 0, 3000, 2000); // Increased height
 
-    // Set camera to follow player, with a slight vertical offset
-    this.cameras.main.startFollow(player, false, 0.5, 0.5, 0, 150);
-
-    this.cameras.main.startFollow(player);
+    // 4. Camera & World Setup
+    // Y bounds extend above y=0 to allow high jumps/platforms.
+    // Max scrollY is clamped to 0, so during normal gameplay the camera follows upward
+    // into negative Y, then back down to ground level.
+    // spawnLevel expands the X bounds as new levels are added.
+    this.physics.world.setBounds(0, -worldTopExtent, 3000, config.height + worldTopExtent);
+    this.cameras.main.setBounds(0, -worldTopExtent, 3000, config.height + worldTopExtent);
+    this.cameras.main.startFollow(player, true, 0.5, 0.5);
 
     // 5. Inputs
     cursors = this.input.keyboard.createCursorKeys();
     ctrlKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL);
-    this.input.addPointer(3); // Enable multi-touch support (e.g. run + jump)
-    
-    // 6. Create Groups for Objects
-    platforms = this.physics.add.staticGroup(); // Static objects don't move
-    floors = this.physics.add.staticGroup(); // Group for the ground floor
+    this.input.addPointer(3);
+
+    // 6. Create Groups
+    platforms = this.physics.add.staticGroup();
+    floors = this.physics.add.staticGroup();
     wordBlocks = this.physics.add.staticGroup();
-    textGroup = this.add.group(); // Group for text labels
-    enemies = this.physics.add.group(); // Group for bad guys
+    textGroup = this.add.group();
+    enemies = this.physics.add.group();
     sootCoins = this.physics.add.group({
-        dragX: 100, // Friction so they stop rolling eventually
-        bounceX: 0.5, // Bounciness
+        dragX: 100,
+        bounceX: 0.5,
         bounceY: 0.4
     });
 
     // 7. Collisions
     this.physics.add.collider(player, platforms);
     this.physics.add.collider(player, floors);
-    // When player hits a block, call the 'hitBlock' function
     this.physics.add.collider(player, wordBlocks, hitBlock, null, this);
     this.physics.add.collider(enemies, floors);
     this.physics.add.collider(player, enemies, hitEnemy, null, this);
@@ -308,138 +298,118 @@ function create() {
 
     // 8. UI Text
     levelText = this.add.text(16, 16, 'Level: 1', { fontSize: '32px', fill: '#000' });
-    levelText.setScrollFactor(0); // Keep text fixed on screen
+    levelText.setScrollFactor(0);
 
-    scoreText = this.add.text(config.width - 16, 16, 'Soot Sprites: 0', { 
-        fontSize: '32px', 
-        fill: '#FFD700', 
-        stroke: '#000', 
+    scoreText = this.add.text(config.width - 16, 16, 'Soot Sprites: 0', {
+        fontSize: '32px',
+        fill: '#FFD700',
+        stroke: '#000',
         strokeThickness: 4,
-        fontFamily: 'Arial' // Change to a simpler font
+        fontFamily: 'Arial'
     });
-    scoreText.setOrigin(1, 0); // Align right
+    scoreText.setOrigin(1, 0);
     scoreText.setScrollFactor(0);
-    
-    // 10. Start the first level
+
+    // 9. Start the first level
     spawnLevel.call(this, 0);
 }
 
 
-
 // --- UPDATE FUNCTION ---
-// Runs roughly 60 times per second to handle movement and logic
 function update() {
-    // If player is dead, stop updating game logic to prevent freezes/glitches
     if (isDead) return;
 
-    // 1. Parallax Scrolling
-    // Move background texture based on camera position to create depth
-    bg1.tilePositionX = this.cameras.main.scrollX * 0.3;
-    bg2.tilePositionX = this.cameras.main.scrollX * 0.7;
-    fg.tilePositionX = this.cameras.main.scrollX;
+    // Parallax is handled automatically by setScrollFactor on each world-space tileSprite.
+    // No manual tilePosition updates needed.
+    updateCastleLifecycle.call(this);
 
     // 2. Smash Attack
     if ((ctrlKey.isDown || window.smashButtonPressed) && !isSmashing) {
         isSmashing = true;
         player.setVelocityX(0);
 
-        // Calculate alignment to keep Totoro centered despite wider image
-        // We set the origin so the "Totoro" part of the smash image aligns with the player body
         const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
         const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 100;
-        
+
         let newOriginX;
-        if (player.flipX) { // Facing LEFT
-            // When flipped, the origin point needs to be on the right side of the body to anchor it correctly.
+        if (player.flipX) {
             newOriginX = (smashWidth - (totoroWidth / 2)) / smashWidth;
-        } else { // Facing RIGHT
-            // Anchor the left side of the body.
+        } else {
             newOriginX = (totoroWidth / 2) / smashWidth;
         }
         player.setOrigin(newOriginX, 0.5);
         player.anims.play('smash');
 
-        // Reset button flag so it only triggers once per press
         if (window.smashButtonPressed) window.smashButtonPressed = false;
 
         player.once('animationcomplete-smash', () => {
             isSmashing = false;
-            player.setOrigin(0.5, 0.5); // Reset to center
+            player.setOrigin(0.5, 0.5);
         });
     }
 
     if (isSmashing) {
-        // Smash Hit Detection
+        // Smash hit detection
         const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
         const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 105;
         const reach = smashWidth - totoroWidth;
-        const hitRange = (totoroWidth / 2) + reach + 15; // Extend 15 pixels beyond graphic
+        const hitRange = (totoroWidth / 2) + reach + 15;
 
         const mikes = enemies.getChildren();
         for (let i = 0; i < mikes.length; i++) {
             const mike = mikes[i];
             if (!mike || !mike.active) continue;
 
-            // Check if Mike is close vertically
             if (Math.abs(mike.y - player.y) < 60) {
                 const dist = mike.x - player.x;
-                if (!player.flipX) { // Facing Right
+                if (!player.flipX) {
                     if (dist > 0 && dist < hitRange) {
-                        const mx = mike.x;
-                        const my = mike.y;
+                        const mx = mike.x, my = mike.y;
                         mike.destroy();
                         debrisEmitter.explode(30, mx, my);
-                        sparkleEmitter.explode(15, player.x + hitRange, player.y); // Sparkle at end of strike
+                        sparkleEmitter.explode(15, player.x + hitRange, player.y);
                     }
-                } else { // Facing Left
+                } else {
                     if (dist < 0 && dist > -(hitRange + 10)) {
-                        const mx = mike.x;
-                        const my = mike.y;
+                        const mx = mike.x, my = mike.y;
                         mike.destroy();
                         debrisEmitter.explode(30, mx, my);
-                        sparkleEmitter.explode(15, player.x - hitRange, player.y); // Sparkle at end of strike
+                        sparkleEmitter.explode(15, player.x - hitRange, player.y);
                     }
                 }
             }
         }
     } else {
-        // 3. Player Movement (Keyboard) - Only if not smashing
+        // 3. Player Movement — only when not smashing
         if (cursors.left.isDown || window.leftButtonPressed) {
             player.setVelocityX(-160);
             player.anims.play('run', true);
-            player.setFlipX(true); // Flip sprite to face left
+            player.setFlipX(true);
         } else if (cursors.right.isDown || window.rightButtonPressed) {
             player.setVelocityX(160);
             player.anims.play('run', true);
-            player.setFlipX(false); // Default face right
+            player.setFlipX(false);
         } else {
             player.setVelocityX(0);
             player.anims.play('idle');
         }
 
-        // 4. Jump (Spacebar)
+        // 4. Jump
         if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
             player.setVelocityY(-440);
             playJumpSound();
         }
     }
 
-    // Mouse facing logic removed as requested
-
-    // 4. Enemy Movement (Patrol and Respawn)
+    // 5. Enemy Movement (Patrol and Respawn)
     const allMikes = enemies.getChildren();
     for (let i = 0; i < allMikes.length; i++) {
         const mike = allMikes[i];
         if (!mike || !mike.active) continue;
 
-        // PRIORITY 1: Check if Mike needs to be respawned.
-        // A buffer of 100px ensures he is fully off-screen to the left.
         if (mike.x < this.cameras.main.scrollX - 100) {
-            // He's left behind! Respawn him ahead of the player, just off-screen to the right.
-            // We're interpreting "ahead by 1 second" as a gameplay-friendly distance ahead.
             let respawnX = this.cameras.main.scrollX + config.width + 100;
 
-            // Ensure we don't place him too close to another Mike
             let safe = false;
             let attempts = 0;
             while (!safe && attempts < 50) {
@@ -447,63 +417,45 @@ function update() {
                 attempts++;
                 for (let otherMike of allMikes) {
                     if (mike !== otherMike && Math.abs(otherMike.x - respawnX) < 400) {
-                        respawnX += 150; // Push further ahead if too close
+                        respawnX += 150;
                         safe = false;
                         break;
                     }
                 }
             }
-            
-            mike.x = respawnX;
-            
-            // We must also update his patrol start point, otherwise he might turn around immediately.
-            mike.startX = mike.x;
 
-            // Ensure he is moving left towards the player.
+            mike.x = respawnX;
+            mike.startX = mike.x;
             mike.setVelocityX(-30);
             mike.setFlipX(true);
         } else {
-            // PRIORITY 2: If not respawning, do normal patrol logic.
             if (mike.body && mike.body.velocity.x < 0 && mike.x < mike.startX - 200) {
                 mike.setVelocityX(30);
-                mike.setFlipX(false); // Face right
+                mike.setFlipX(false);
             } else if (mike.body && mike.body.velocity.x > 0 && mike.x > mike.startX + 200) {
                 mike.setVelocityX(-30);
-                mike.setFlipX(true); // Face left
+                mike.setFlipX(true);
             }
         }
     }
 
-    // 5. Sootcoin Flee Logic
+    // 6. Sootcoin Flee Logic
     sootCoins.children.iterate((coin) => {
         if (coin && coin.body) {
             const dist = Phaser.Math.Distance.Between(player.x, player.y, coin.x, coin.y);
-            // If player is close (within 200px), roll away!
             if (dist < 200) {
-                if (player.x < coin.x) {
-                    coin.setVelocityX(75); // Roll right
-                } else {
-                    coin.setVelocityX(-75); // Roll left
-                }
+                coin.setVelocityX(player.x < coin.x ? 75 : -75);
             }
-
-            // Rotate based on velocity to look like rolling
-            coin.rotation += coin.body.velocity.x * 0.0035; // Decrease rotation speed by 30%
+            coin.rotation += coin.body.velocity.x * 0.0035;
         }
     });
 
-    // 6. Audio Trigger for Target Word
+    // 7. Audio Trigger for Target Word
     if (!wordSpoken && player.x > audioTriggerX) {
-        const data = levels[currentLevel % levels.length];
+        const data = activeLevels[currentLevel % activeLevels.length];
         const soundKey = data.target.toLowerCase().trim();
-        
-        console.log(`Triggering sound for: ${soundKey} at x:${player.x}`);
-        
-        // Check cache instead of sound manager instance to ensure it plays the first time
         if (this.cache.audio.exists(soundKey)) {
             this.sound.play(soundKey);
-        } else {
-            console.warn(`Audio key '${soundKey}' not found in cache!`);
         }
         wordSpoken = true;
     }
@@ -511,75 +463,196 @@ function update() {
 
 // --- CUSTOM FUNCTIONS ---
 
-// Function to spawn a new level segment
+function getCastleWorldX(startX) {
+    // For parallax layers, world X must be offset by scrollFactor to keep a stable
+    // on-screen placement per level segment.
+    return skyCastleBaseXInLevel + (startX * skyCastleParallaxX);
+}
+
+function spawnCastle(scene, startX) {
+    const castleSource = scene.textures.get('skycastle').getSourceImage();
+    const castleWorldX = getCastleWorldX(startX);
+    const castle = scene.add.image(castleWorldX, skyCastleBaseY, 'skycastle');
+    castle.setScrollFactor(skyCastleParallaxX, skyCastleParallaxY);
+    castle.setDepth(-20);
+    if (castleSource && castleSource.height) {
+        castle.setScale(160 / castleSource.height);
+    }
+    return castle;
+}
+
+function isCastleOffscreen(scene, castle) {
+    const camera = scene.cameras.main;
+    const halfW = (castle.displayWidth || 0) / 2;
+    const screenX = castle.x - (camera.scrollX * skyCastleParallaxX);
+    return (screenX + halfW < 0) || (screenX - halfW > config.width);
+}
+
+function updateCastleLifecycle() {
+    const onGroundFloor = !!(
+        player &&
+        player.body &&
+        (player.body.blocked.down || player.body.touching.down) &&
+        player.y >= (config.height - 120)
+    );
+
+    if (onGroundFloor) {
+        const currentStartX = currentLevel * 2400;
+        if (!activeCastle || !activeCastle.active || isCastleOffscreen(this, activeCastle)) {
+            if (activeCastle && activeCastle.active) activeCastle.destroy();
+            activeCastle = spawnCastle(this, currentStartX);
+        }
+        pendingCastleStartX = null;
+        return;
+    }
+
+    if (activeCastle && activeCastle.active && isCastleOffscreen(this, activeCastle)) {
+        activeCastle.destroy();
+        activeCastle = null;
+    }
+
+    if (!activeCastle && pendingCastleStartX !== null) {
+        const nextCastleX = getCastleWorldX(pendingCastleStartX);
+        const nextScreenX = nextCastleX - (this.cameras.main.scrollX * skyCastleParallaxX);
+
+        // Only spawn when off-canvas so the player never sees a pop-in.
+        if (nextScreenX < -50 || nextScreenX > (config.width + 50)) {
+            activeCastle = spawnCastle(this, pendingCastleStartX);
+            pendingCastleStartX = null;
+        }
+    }
+}
+
 function spawnLevel(index) {
     currentLevel = index;
     levelText.setText('Level: ' + (currentLevel + 1));
 
-    // Calculate the starting X position for this level
-    // Each level is 3000px wide. Level 0 starts at 0, Level 1 at 3000, etc.
-    const startX = currentLevel * 2400; // Increased distance between levels
+    // Clean up objects from 2 levels back — the player has moved well past them.
+    const cleanupIndex = index - 2;
+    if (cleanupIndex >= 0 && levelObjectsMap[cleanupIndex]) {
+        const old = levelObjectsMap[cleanupIndex];
+        if (old.floor && old.floor.active) old.floor.destroy();
+        old.platforms.forEach(p => { if (p && p.active) p.destroy(); });
+        old.wordBlocks.forEach(b => { if (b && b.active) b.destroy(); });
+        old.texts.forEach(t => { if (t && t.active) t.destroy(); });
+        old.coins.forEach(c => { if (c && c.active) c.destroy(); });
+        delete levelObjectsMap[cleanupIndex];
+    }
 
-   // Expand the world and camera bounds to include the new level area
-   const newMaxX = startX + 2400;
-    this.physics.world.setBounds(0, 0, newMaxX, config.height);
-    this.cameras.main.setBounds(0, 0, newMaxX, config.height);
+    // Bucket to track all objects created this level for later cleanup
+    const levelObjects = { floor: null, platforms: [], wordBlocks: [], texts: [], coins: [] };
 
-    // Add a new floor segment for this level
-    // Get height of brickpath to align floor collision exactly with the visual
+    const startX = currentLevel * 2400;
+
+    // Expand world and camera bounds to include the new level area.
+    const newMaxX = startX + 2400;
+    this.physics.world.setBounds(0, -worldTopExtent, newMaxX, config.height + worldTopExtent);
+    this.cameras.main.setBounds(0, -worldTopExtent, newMaxX, config.height + worldTopExtent);
+
+    if (!activeCastle || !activeCastle.active) {
+        activeCastle = spawnCastle(this, startX);
+    } else {
+        pendingCastleStartX = startX;
+    }
+
+    // Invisible physics floor for this level segment
     const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
-    // Position floor so it matches the brickpath height at the bottom of the screen
     let floor = this.add.rectangle(startX + 1500, config.height - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
     floor.setVisible(false);
     this.physics.add.existing(floor, true);
     floors.add(floor);
+    levelObjects.floor = floor;
 
     // --- JUMP OVER MIKE PLATFORMS ---
-    // 3 short platforms in random order to help jump over Mike
-    let jumpX = startX + 250;
-    for (let i = 0; i < 3; i++) {
-        let jumpY;
-        if (i === 0) {
-            // First platform low enough to jump on (ground is ~575)
-            jumpY = Phaser.Math.Between(450, 480);
-        } else {
-            // Others random, can be higher or lower
-            jumpY = Phaser.Math.Between(350, 480);
-        }
-        
-        // Create short platform from image
-        let p = platforms.create(jumpX, jumpY, 'platform');
-        p.setDisplaySize(120, 40); // Set size
-        p.refreshBody(); // IMPORTANT: Update physics body after resize
+    const jumpPlatforms = [
+        { x: startX + 250, y: 480 },
+        { x: startX + 430, y: 390 },
+        { x: startX + 610, y: 300 }
+    ];
+    for (let i = 0; i < jumpPlatforms.length; i++) {
+        const pos = jumpPlatforms[i];
 
-        // One-way collision: Only collide from top
+        let p = platforms.create(pos.x, pos.y, 'platform');
+        p.setDisplaySize(120, 40);
+        p.refreshBody();
         p.body.checkCollision.down = false;
         p.body.checkCollision.left = false;
         p.body.checkCollision.right = false;
+        levelObjects.platforms.push(p);
 
-        // Chance to spawn a Sootcoin on the platform (80% chance)
         if (Phaser.Math.Between(0, 100) < 80) {
-            let coin = sootCoins.create(jumpX, jumpY - 50, 'sootcoin');
+            let coin = sootCoins.create(pos.x, pos.y - 50, 'sootcoin');
             coin.setScale(0.7);
+            levelObjects.coins.push(coin);
         }
-
-        // Stagger X position
-        jumpX += Phaser.Math.Between(120, 160);
     }
 
-    // Get data for the current level (loop back to 0 if we pass level 10)
-    const data = levels[currentLevel % levels.length];
+    const data = activeLevels[currentLevel % activeLevels.length];
 
     // --- PLATFORM & BLOCK GENERATION ---
-    if (currentLevel < 3) {
-        // --- Levels 1-3: Staircase to one wide platform ---
-        const numPlatforms = Math.min(currentLevel, 4);
-        let blockY = 350;
+    if (currentLevel === 1) {
+        // Level 2: three lead-up platforms to one larger platform with all 3 word blocks above it.
+        const leadUpPlatforms = [
+            { x: startX + 360, y: 390 },
+            { x: startX + 520, y: 290 },
+            { x: startX + 680, y: 190 }
+        ];
+
+        for (let i = 0; i < leadUpPlatforms.length; i++) {
+            const pos = leadUpPlatforms[i];
+            let platform = platforms.create(pos.x, pos.y, 'platform');
+            platform.setDisplaySize(180, 40).refreshBody();
+            platform.body.checkCollision.down = false;
+            platform.body.checkCollision.left = false;
+            platform.body.checkCollision.right = false;
+            levelObjects.platforms.push(platform);
+
+            if (Phaser.Math.Between(0, 100) < 80) {
+                let coin = sootCoins.create(pos.x, pos.y - 50, 'sootcoin');
+                coin.setScale(0.7);
+                levelObjects.coins.push(coin);
+            }
+        }
+
+        const finalPlatformX = startX + 700;
+        const finalPlatformY = 80;
+        let finalPlatform = platforms.create(finalPlatformX, finalPlatformY, 'platform');
+        finalPlatform.setDisplaySize(560, 40).refreshBody();
+        finalPlatform.body.checkCollision.down = false;
+        finalPlatform.body.checkCollision.left = false;
+        finalPlatform.body.checkCollision.right = false;
+        levelObjects.platforms.push(finalPlatform);
+
+        const blockY = finalPlatformY - 190;
+        const positions = [finalPlatformX - 180, finalPlatformX, finalPlatformX + 180];
+        for (let i = 0; i < 3; i++) {
+            let x = positions[i];
+            let y = blockY;
+
+            const bHeight = this.textures.get('bubbleblock1').getSourceImage().height || 64;
+            let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
+            block.setOrigin(0.5, 1).refreshBody();
+            block.word = data.options[i];
+            levelObjects.wordBlocks.push(block);
+
+            let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
+            text.setOrigin(0.5);
+            textGroup.add(text);
+            block.textObject = text;
+            levelObjects.texts.push(text);
+        }
+
+        audioTriggerX = finalPlatformX - 700;
+
+    } else if (currentLevel < 3) {
+        // Levels 1–3: Staircase up to one wide platform
+        const numPlatforms = Math.min(Math.max(currentLevel + 2, 2), 4);
+        let blockY = 220;
         let blockXBase = startX + 1800;
 
         if (numPlatforms > 0) {
             let platX = startX + 1000;
-            let platY = 500;
+            let platY = 460;
 
             for (let i = 0; i < numPlatforms; i++) {
                 const isFinalPlatform = (i === numPlatforms - 1);
@@ -591,23 +664,24 @@ function spawnLevel(index) {
                 platform.body.checkCollision.down = false;
                 platform.body.checkCollision.left = false;
                 platform.body.checkCollision.right = false;
+                levelObjects.platforms.push(platform);
 
                 if (Phaser.Math.Between(0, 100) < 80) {
                     let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
                     coin.setScale(0.7);
+                    levelObjects.coins.push(coin);
                 }
 
                 if (isFinalPlatform) {
-                    blockY = platY - 190; // Position blocks a jumpable height above the platform
+                    blockY = platY - 210;
                     blockXBase = platX;
                 }
 
                 platX += 250;
-                platY -= 90;
+                platY -= 110;
             }
         }
 
-        // Create 3 blocks on the single platform (or ground for level 1)
         const positions = [blockXBase, blockXBase + 200, blockXBase + 400];
         for (let i = 0; i < 3; i++) {
             let x = positions[i];
@@ -617,151 +691,143 @@ function spawnLevel(index) {
             let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
             block.setOrigin(0.5, 1).refreshBody();
             block.word = data.options[i];
+            levelObjects.wordBlocks.push(block);
 
             let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
             text.setOrigin(0.5);
             textGroup.add(text);
             block.textObject = text;
+            levelObjects.texts.push(text);
         }
 
         audioTriggerX = blockXBase - 700;
 
     } else {
-        // --- Levels 4+: Three separate platforms for blocks ---
-
-        // Lead-up platforms to get to the block area
+        // Levels 4+: Three separate elevated platforms for blocks
         let leadUpPlatX = startX + 1000;
-        let leadUpPlatY = 480;
-        for (let i = 0; i < 2; i++) {
+        let leadUpPlatY = 420;
+        for (let i = 0; i < 3; i++) {
             let p = platforms.create(leadUpPlatX, leadUpPlatY, 'platform');
             p.setDisplaySize(150, 40).refreshBody();
             p.body.checkCollision.down = false;
             p.body.checkCollision.left = false;
             p.body.checkCollision.right = false;
+            levelObjects.platforms.push(p);
+
             if (Phaser.Math.Between(0, 100) < 80) {
-                sootCoins.create(leadUpPlatX, leadUpPlatY - 50, 'sootcoin').setScale(0.7);
+                let coin = sootCoins.create(leadUpPlatX, leadUpPlatY - 50, 'sootcoin').setScale(0.7);
+                levelObjects.coins.push(coin);
             }
-            leadUpPlatX += 250;
-            leadUpPlatY -= 100;
+            leadUpPlatX += 240;
+            leadUpPlatY -= 120;
         }
 
-        // Define positions for the three word-platforms and shuffle them
         const blockPlatformPositions = [
-            { x: startX + 1500, y: 420 },
-            { x: startX + 1800, y: 320 },
-            { x: startX + 2100, y: 420 }
+            { x: startX + 1680, y: 140 },
+            { x: startX + 1940, y: 40 },
+            { x: startX + 2200, y: 140 }
         ];
         Phaser.Utils.Array.Shuffle(blockPlatformPositions);
 
-        // Create the platforms and place a block on each
         for (let i = 0; i < 3; i++) {
             const pos = blockPlatformPositions[i];
-            
+
             let platform = platforms.create(pos.x, pos.y, 'platform');
             platform.setDisplaySize(200, 40).refreshBody();
             platform.body.checkCollision.down = false;
             platform.body.checkCollision.left = false;
             platform.body.checkCollision.right = false;
+            levelObjects.platforms.push(platform);
 
-            // Place block on this platform
             let x = pos.x;
-            let y = pos.y - 190; // Position block a jumpable height above the platform
+            let y = pos.y - 190;
 
             const bHeight = this.textures.get('bubbleblock1').getSourceImage().height || 64;
             let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
             block.setOrigin(0.5, 1).refreshBody();
             block.word = data.options[i];
+            levelObjects.wordBlocks.push(block);
 
             let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
             text.setOrigin(0.5);
             textGroup.add(text);
             block.textObject = text;
+            levelObjects.texts.push(text);
         }
-        
-        // Set audio trigger based on the start of the block platform area
+
         audioTriggerX = startX + 1500 - 700;
     }
 
     wordSpoken = false;
-    console.log(`Spawning Level ${currentLevel}. Target: ${data.target}. Audio Trigger at: ${audioTriggerX}`);
 
     // --- SPAWN GROUND COINS ---
-    // Only place coins on the ground in the "empty space" between levels (start of segment)
     for (let i = 0; i < 3; i++) {
-        let cx = startX + 400 + (i * 150); // Move coins further away from start
-        let coin = sootCoins.create(cx, 450, 'sootcoin'); // Spawn in air to fall
+        let cx = startX + 400 + (i * 150);
+        let coin = sootCoins.create(cx, 450, 'sootcoin');
         coin.setScale(0.7);
+        levelObjects.coins.push(coin);
     }
 
     // --- SPAWN MIKE (BAD GUY) ---
-    // Place him on the ground, a bit ahead of the player
-    // Adjust Y to ensure he sits on the floor (floor is at 600 - fgHeight/2)
-    // Let's put him at y=500 and let gravity settle him, or calculate exact.
-    
-    // Determine number of Mikes based on level
     let numMikes = 1;
-    if (currentLevel >= 4) numMikes = 2; // Level 5+ (Index 4 is Level 5)
-    if (currentLevel >= 7) numMikes = 3; // Level 8+ (Index 7 is Level 8)
+    if (currentLevel >= 4) numMikes = 2;
+    if (currentLevel >= 7) numMikes = 3;
 
     for (let i = 0; i < numMikes; i++) {
-        // Space them out so they aren't on top of each other
         let mikeX = startX + 600 + (i * 400);
-
         let mike = enemies.create(mikeX, 500, 'mike1');
-        mike.setScale(0.64); // Decrease size by 20% (0.8 * 0.8 = 0.64)
+        mike.setScale(0.64);
         mike.setCollideWorldBounds(true);
-        mike.startX = mikeX; // Remember starting spot for patrol
-        mike.setVelocityX(-30); // Start walking left
+        mike.startX = mikeX;
+        mike.setVelocityX(-30);
         mike.setFlipX(true);
         mike.anims.play('mikeWalk');
     }
+
+    // Store level objects for cleanup when 2 levels ahead is reached
+    levelObjectsMap[index] = levelObjects;
 }
 
-// Function called when player touches a block
+// Called when player hits the bottom of a block (jumping up)
 function hitBlock(player, block) {
-    // Only trigger if player hits the BOTTOM of the block (jumping up)
     if (player.body.touching.up && block.body.touching.down) {
-       
-        // try { this.sound.play('hitSound'); } catch (e) {}
+        const data = activeLevels[currentLevel % activeLevels.length];
 
-        const data = levels[currentLevel % levels.length];
-        
         if (block.word === data.target) {
             // CORRECT!
-            block.body.enable = false;  // Disable block so it can't be hit again
-            flowerEmitter.explode(30, block.x, block.y); // Flower burst
-            
-            // Slow swapout animation
-            this.time.delayedCall(200, () => { block.setTexture('bubbleblock2'); });
-            this.time.delayedCall(400, () => { block.setTexture('bubbleblock3'); });
-            this.time.delayedCall(600, () => { block.setTexture('bubbleblock4'); });
+            block.body.enable = false;
+            flowerEmitter.explode(30, block.x, block.y);
 
-            // Generate the next level immediately so player can walk to it
+            this.time.delayedCall(200, () => { if (block.active) block.setTexture('bubbleblock2'); });
+            this.time.delayedCall(400, () => { if (block.active) block.setTexture('bubbleblock3'); });
+            this.time.delayedCall(600, () => { if (block.active) block.setTexture('bubbleblock4'); });
+
             spawnLevel.call(this, currentLevel + 1);
-            
+
         } else {
             // INCORRECT!
-            // Disable the block so it can't be hit again immediately
             block.body.enable = false;
-            
-            // Darken by 80% (approx 20% brightness)
             block.setTint(0x333333);
 
-            // Fade out block and text
+            // Fade out, then fully destroy the block and its text label
             this.tweens.add({
                 targets: [block, block.textObject],
                 alpha: 0,
-                duration: 1000
+                duration: 1000,
+                onComplete: () => {
+                    if (block.textObject && block.textObject.active) block.textObject.destroy();
+                    if (block.active) block.destroy();
+                }
             });
 
-            // Reset coins collected to zero and animate them flying away
+            // Penalize: all collected coins fly off screen
             if (score > 0) {
-                const coinsToShow = Math.min(score, 20); // Cap visual coins at 20
+                const coinsToShow = Math.min(score, 20);
                 for (let i = 0; i < coinsToShow; i++) {
                     let coin = this.add.image(config.width / 2, 100, 'sootcoin').setScrollFactor(0).setScale(0.7);
                     this.tweens.add({
                         targets: coin,
-                        x: -100, // Fly off screen left
+                        x: -100,
                         duration: Phaser.Math.Between(500, 1000),
                         onComplete: () => coin.destroy()
                     });
@@ -773,108 +839,132 @@ function hitBlock(player, block) {
     }
 }
 
-// Function called when player touches Mike
-function hitEnemy(player, enemy) {
-    // If we are already in the process of dying, do nothing.
-    if (isDead) {
-        return;
-    }
-    // Safety check to ensure physics system is still available
+// Called when player touches Mike
+function hitEnemy(_player, _enemy) {
+    if (isDead) return;
     if (!this.physics) return;
 
-    isDead = true; // Set the flag to prevent this from being called again.
-
-    this.physics.pause(); // Stop the game
-    player.setTint(0xff0000); // Turn red
+    isDead = true;
+    playCrashSound();
+    this.physics.pause();
+    player.setTint(0xff0000);
     player.anims.play('idle');
-    
-    // Stop music immediately
+
     if (window.backgroundMusic) {
         window.backgroundMusic.stop();
     }
 
-    // Restart game after 1 second
     this.time.delayedCall(1000, () => {
         currentLevel = 0;
         this.scene.restart();
     });
 }
 
-// Function called when player collects a coin
-function collectCoin(player, coin) {
+// Called when player collects a coin
+function collectCoin(_player, coin) {
     coin.destroy();
     playCoinSound();
     score += 1;
     scoreText.setText('Soot Sprites: ' + score);
 }
 
-// Function to use browser Text-to-Speech
-function speak(text) {
-    // Check if browser supports speech
-    if ('speechSynthesis' in window) {
-        // Cancel any current speech so they don't overlap
-        window.speechSynthesis.cancel();
-        
-        const utterance = new SpeechSynthesisUtterance(text);
-        window.speechSynthesis.speak(utterance);
+// --- AUDIO HELPERS ---
+
+function getAudioCtx() {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
+        if (AudioContext) audioCtx = new AudioContext();
     }
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    return audioCtx;
 }
 
-// Function to generate a coin sound using the Web Audio API (no file needed)
 function playCoinSound() {
-    if (!audioCtx) {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) audioCtx = new AudioContext();
-    }
-    if (!audioCtx) return;
+    const ctx = getAudioCtx();
+    if (!ctx) return;
 
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
-
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(ctx.destination);
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(2000, audioCtx.currentTime + 0.1);
-
-    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+    osc.frequency.setValueAtTime(900, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(2000, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
 
     osc.start();
-    osc.stop(audioCtx.currentTime + 0.1);
+    osc.stop(ctx.currentTime + 0.1);
 }
 
-// Function to generate a jump sound (Low volume)
 function playJumpSound() {
-    if (!audioCtx) {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) audioCtx = new AudioContext();
-    }
-    if (!audioCtx) return;
+    const ctx = getAudioCtx();
+    if (!ctx) return;
 
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
-
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(ctx.destination);
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
-    osc.frequency.linearRampToValueAtTime(400, audioCtx.currentTime + 0.15);
-
-    // Low volume
-    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 0.15);
+    osc.frequency.setValueAtTime(260, ctx.currentTime);
+    osc.frequency.linearRampToValueAtTime(330, ctx.currentTime + 0.06);
+    osc.frequency.exponentialRampToValueAtTime(210, ctx.currentTime + 0.2);
+    gain.gain.setValueAtTime(0.001, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.035, ctx.currentTime + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
 
     osc.start();
-    osc.stop(audioCtx.currentTime + 0.15);
+    osc.stop(ctx.currentTime + 0.2);
+}
+
+function playCrashSound() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+
+    const oscA = ctx.createOscillator();
+    const gainA = ctx.createGain();
+    oscA.connect(gainA);
+    gainA.connect(ctx.destination);
+    oscA.type = 'sawtooth';
+    oscA.frequency.setValueAtTime(220, now);
+    oscA.frequency.exponentialRampToValueAtTime(70, now + 0.22);
+    gainA.gain.setValueAtTime(0.001, now);
+    gainA.gain.linearRampToValueAtTime(0.3, now + 0.01);
+    gainA.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    const oscB = ctx.createOscillator();
+    const gainB = ctx.createGain();
+    oscB.connect(gainB);
+    gainB.connect(ctx.destination);
+    oscB.type = 'triangle';
+    oscB.frequency.setValueAtTime(110, now);
+    oscB.frequency.exponentialRampToValueAtTime(45, now + 0.26);
+    gainB.gain.setValueAtTime(0.001, now);
+    gainB.gain.linearRampToValueAtTime(0.24, now + 0.008);
+    gainB.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+
+    // Short high-frequency transient for a stronger "smash" impact.
+    const oscC = ctx.createOscillator();
+    const gainC = ctx.createGain();
+    oscC.connect(gainC);
+    gainC.connect(ctx.destination);
+    oscC.type = 'square';
+    oscC.frequency.setValueAtTime(900, now);
+    oscC.frequency.exponentialRampToValueAtTime(260, now + 0.07);
+    gainC.gain.setValueAtTime(0.001, now);
+    gainC.gain.linearRampToValueAtTime(0.18, now + 0.004);
+    gainC.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+    oscA.start(now);
+    oscB.start(now);
+    oscC.start(now);
+    oscA.stop(now + 0.22);
+    oscB.stop(now + 0.26);
+    oscC.stop(now + 0.09);
 }
