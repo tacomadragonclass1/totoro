@@ -1,3 +1,42 @@
+// --- CONSTANTS ---
+const PHYSICS = {
+    GRAVITY: 600,
+};
+
+const PLAYER = {
+    MOVE_VELOCITY: 160,
+    JUMP_VELOCITY: -440,
+    BOUNCE: 0.1,
+    BODY_SIZE: { x: 50, y: 60 },
+    BODY_OFFSET: { x: 7, y: 20 },
+    SMASH_VERTICAL_RANGE: 60,
+    SMASH_REACH_BONUS: 15,
+};
+
+const ENEMY = {
+    PATROL_SPEED: 30,
+    PATROL_DISTANCE: 200,
+    RESPAWN_X_OFFSET: 100,
+    MIN_SPAWN_DISTANCE: 400,
+    RESPAWN_ADJUST: 150,
+};
+
+const COIN = {
+    FLEE_DISTANCE: 200,
+    FLEE_SPEED: 75,
+    SCALE: 0.7,
+    SPAWN_CHANCE: 80, // out of 100
+};
+
+const LEVEL = {
+    WIDTH: 2400,
+};
+
+const UI = {
+    LEVEL_PREFIX: 'Round: ',
+    SCORE_PREFIX: 'Soot Sprites: '
+};
+
 // --- CONFIGURATION ---
 const config = {
     type: Phaser.AUTO,
@@ -7,7 +46,7 @@ const config = {
     physics: {
         default: 'arcade',
         arcade: {
-            gravity: { y: 600 },
+            gravity: { y: PHYSICS.GRAVITY },
             debug: false
         }
     },
@@ -43,6 +82,8 @@ let flowerEmitter;
 let sparkleEmitter;
 let ctrlKey;
 let isSmashing = false;
+let levelComplete = false;
+let levelCompleteBlock;
 let isDead = false;
 let backgroundMusic;
 let activeLevels;
@@ -112,6 +153,7 @@ function create() {
     score = 0;
     isSmashing = false;
     isDead = false;
+    levelComplete = false;
     levelObjectsMap = {};
     activeCastle = null;
     pendingCastleStartX = null;
@@ -122,7 +164,7 @@ function create() {
 
     window.triggerJump = () => {
         if (player && (player.body.touching.down || player.body.blocked.down)) {
-            player.setVelocityY(-440);
+            player.setVelocityY(PLAYER.JUMP_VELOCITY);
             playJumpSound();
         }
     };
@@ -256,9 +298,9 @@ function create() {
 
     // 3. Create Player (Totoro)
     player = this.physics.add.sprite(100, 455, 'totoro1');
-    player.setBounce(0.1);
+    player.setBounce(PLAYER.BOUNCE);
     player.setCollideWorldBounds(true);
-    player.body.setSize(50, 60).setOffset(7, 20);
+    player.body.setSize(PLAYER.BODY_SIZE.x, PLAYER.BODY_SIZE.y).setOffset(PLAYER.BODY_OFFSET.x, PLAYER.BODY_OFFSET.y);
 
     // 4. Camera & World Setup
     // Y bounds extend above y=0 to allow high jumps/platforms.
@@ -291,16 +333,17 @@ function create() {
     this.physics.add.collider(player, floors);
     this.physics.add.collider(player, wordBlocks, hitBlock, null, this);
     this.physics.add.collider(enemies, floors);
+    this.physics.add.collider(player, levelCompleteBlock, hitLevelCompleteBlock, null, this);
     this.physics.add.collider(player, enemies, hitEnemy, null, this);
     this.physics.add.collider(sootCoins, platforms);
     this.physics.add.collider(sootCoins, floors);
     this.physics.add.overlap(player, sootCoins, collectCoin, null, this);
 
     // 8. UI Text
-    levelText = this.add.text(16, 16, 'Level: 1', { fontSize: '32px', fill: '#000' });
+    levelText = this.add.text(16, 16, UI.LEVEL_PREFIX + (currentLevel + 1), { fontSize: '32px', fill: '#000' });
     levelText.setScrollFactor(0);
 
-    scoreText = this.add.text(config.width - 16, 16, 'Soot Sprites: 0', {
+    scoreText = this.add.text(config.width - 16, 16, UI.SCORE_PREFIX + score, {
         fontSize: '32px',
         fill: '#FFD700',
         stroke: '#000',
@@ -316,6 +359,7 @@ function create() {
 
 
 // --- UPDATE FUNCTION ---
+
 function update() {
     if (isDead) return;
 
@@ -352,20 +396,20 @@ function update() {
         // Smash hit detection
         const totoroWidth = this.textures.get('totoro1').getSourceImage().width || 64;
         const smashWidth = this.textures.get('totorosmash1').getSourceImage().width || 105;
-        const reach = smashWidth - totoroWidth;
-        const hitRange = (totoroWidth / 2) + reach + 15;
+        const reach = smashWidth - totoroWidth; // How much further the bag sprite reaches
+        const hitRange = (totoroWidth / 2) + reach + PLAYER.SMASH_REACH_BONUS;
 
         const mikes = enemies.getChildren();
         for (let i = 0; i < mikes.length; i++) {
             const mike = mikes[i];
             if (!mike || !mike.active) continue;
-
-            if (Math.abs(mike.y - player.y) < 60) {
+            if (Math.abs(mike.y - player.y) < PLAYER.SMASH_VERTICAL_RANGE) {
                 const dist = mike.x - player.x;
                 if (!player.flipX) {
                     if (dist > 0 && dist < hitRange) {
                         const mx = mike.x, my = mike.y;
                         mike.destroy();
+                        playSmashHitSound();
                         debrisEmitter.explode(30, mx, my);
                         sparkleEmitter.explode(15, player.x + hitRange, player.y);
                     }
@@ -373,6 +417,7 @@ function update() {
                     if (dist < 0 && dist > -(hitRange + 10)) {
                         const mx = mike.x, my = mike.y;
                         mike.destroy();
+                        playSmashHitSound();
                         debrisEmitter.explode(30, mx, my);
                         sparkleEmitter.explode(15, player.x - hitRange, player.y);
                     }
@@ -381,12 +426,18 @@ function update() {
         }
     } else {
         // 3. Player Movement — only when not smashing
+
+         if (levelComplete) {
+            player.setVelocityX(50); // Gentle nudge towards the final block
+            return; // Stop normal movement
+        }
+
         if (cursors.left.isDown || window.leftButtonPressed) {
-            player.setVelocityX(-160);
+            player.setVelocityX(-PLAYER.MOVE_VELOCITY);
             player.anims.play('run', true);
             player.setFlipX(true);
         } else if (cursors.right.isDown || window.rightButtonPressed) {
-            player.setVelocityX(160);
+            player.setVelocityX(PLAYER.MOVE_VELOCITY);
             player.anims.play('run', true);
             player.setFlipX(false);
         } else {
@@ -396,7 +447,8 @@ function update() {
 
         // 4. Jump
         if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
-            player.setVelocityY(-440);
+
+            player.setVelocityY(PLAYER.JUMP_VELOCITY);
             playJumpSound();
         }
     }
@@ -407,8 +459,8 @@ function update() {
         const mike = allMikes[i];
         if (!mike || !mike.active) continue;
 
-        if (mike.x < this.cameras.main.scrollX - 100) {
-            let respawnX = this.cameras.main.scrollX + config.width + 100;
+        if (mike.x < this.cameras.main.scrollX - ENEMY.RESPAWN_X_OFFSET) {
+            let respawnX = this.cameras.main.scrollX + config.width + ENEMY.RESPAWN_X_OFFSET;
 
             let safe = false;
             let attempts = 0;
@@ -416,8 +468,8 @@ function update() {
                 safe = true;
                 attempts++;
                 for (let otherMike of allMikes) {
-                    if (mike !== otherMike && Math.abs(otherMike.x - respawnX) < 400) {
-                        respawnX += 150;
+                    if (mike !== otherMike && Math.abs(otherMike.x - respawnX) < ENEMY.MIN_SPAWN_DISTANCE) {
+                        respawnX += ENEMY.RESPAWN_ADJUST;
                         safe = false;
                         break;
                     }
@@ -426,14 +478,14 @@ function update() {
 
             mike.x = respawnX;
             mike.startX = mike.x;
-            mike.setVelocityX(-30);
+            mike.setVelocityX(-ENEMY.PATROL_SPEED);
             mike.setFlipX(true);
         } else {
-            if (mike.body && mike.body.velocity.x < 0 && mike.x < mike.startX - 200) {
-                mike.setVelocityX(30);
+            if (mike.body && mike.body.velocity.x < 0 && mike.x < mike.startX - ENEMY.PATROL_DISTANCE) {
+                mike.setVelocityX(ENEMY.PATROL_SPEED);
                 mike.setFlipX(false);
-            } else if (mike.body && mike.body.velocity.x > 0 && mike.x > mike.startX + 200) {
-                mike.setVelocityX(-30);
+            } else if (mike.body && mike.body.velocity.x > 0 && mike.x > mike.startX + ENEMY.PATROL_DISTANCE) {
+                mike.setVelocityX(-ENEMY.PATROL_SPEED);
                 mike.setFlipX(true);
             }
         }
@@ -443,8 +495,8 @@ function update() {
     sootCoins.children.iterate((coin) => {
         if (coin && coin.body) {
             const dist = Phaser.Math.Distance.Between(player.x, player.y, coin.x, coin.y);
-            if (dist < 200) {
-                coin.setVelocityX(player.x < coin.x ? 75 : -75);
+            if (dist < COIN.FLEE_DISTANCE) {
+                coin.setVelocityX(player.x < coin.x ? COIN.FLEE_SPEED : -COIN.FLEE_SPEED);
             }
             coin.rotation += coin.body.velocity.x * 0.0035;
         }
@@ -497,7 +549,7 @@ function updateCastleLifecycle() {
     );
 
     if (onGroundFloor) {
-        const currentStartX = currentLevel * 2400;
+        const currentStartX = currentLevel * LEVEL.WIDTH;
         if (!activeCastle || !activeCastle.active || isCastleOffscreen(this, activeCastle)) {
             if (activeCastle && activeCastle.active) activeCastle.destroy();
             activeCastle = spawnCastle(this, currentStartX);
@@ -523,11 +575,20 @@ function updateCastleLifecycle() {
     }
 }
 
+function createLevelCompleteBlock(scene, startX) {
+    const x = startX + LEVEL.WIDTH - 200;
+    const y = config.height - 200;
+    levelCompleteBlock = scene.physics.add.staticSprite(x, y, 'bubbleblock1');
+    levelCompleteBlock.setDisplaySize(200, 80).refreshBody();
+    levelCompleteBlock.word = "END OF LEVEL 1";
+    return levelCompleteBlock;
+}
+
 function spawnLevel(index) {
     currentLevel = index;
-    levelText.setText('Level: ' + (currentLevel + 1));
+    levelText.setText(UI.LEVEL_PREFIX + (currentLevel + 1));
 
-    // Clean up objects from 2 levels back — the player has moved well past them.
+    // Clean up objects from 2 rounds back — the player has moved well past them.
     const cleanupIndex = index - 2;
     if (cleanupIndex >= 0 && levelObjectsMap[cleanupIndex]) {
         const old = levelObjectsMap[cleanupIndex];
@@ -537,25 +598,32 @@ function spawnLevel(index) {
         old.texts.forEach(t => { if (t && t.active) t.destroy(); });
         old.coins.forEach(c => { if (c && c.active) c.destroy(); });
         delete levelObjectsMap[cleanupIndex];
+
+        if (levelCompleteBlock && levelCompleteBlock.active) levelCompleteBlock.destroy();
     }
 
-    // Bucket to track all objects created this level for later cleanup
+    // Bucket to track all objects created this round for later cleanup
     const levelObjects = { floor: null, platforms: [], wordBlocks: [], texts: [], coins: [] };
 
-    const startX = currentLevel * 2400;
+    const startX = currentLevel * LEVEL.WIDTH;
 
-    // Expand world and camera bounds to include the new level area.
-    const newMaxX = startX + 2400;
+    // Expand world and camera bounds to include the new round area.
+    const newMaxX = startX + LEVEL.WIDTH;
     this.physics.world.setBounds(0, -worldTopExtent, newMaxX, config.height + worldTopExtent);
     this.cameras.main.setBounds(0, -worldTopExtent, newMaxX, config.height + worldTopExtent);
 
     if (!activeCastle || !activeCastle.active) {
         activeCastle = spawnCastle(this, startX);
     } else {
+         if (index === 10) {
+            // Last level, create END text
+             createLevelCompleteBlock(this, startX);
+        }
+
         pendingCastleStartX = startX;
     }
 
-    // Invisible physics floor for this level segment
+    // Invisible physics floor for this round segment
     const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
     let floor = this.add.rectangle(startX + 1500, config.height - (fgHeight / 2), 3000, fgHeight, 0x2E8B57);
     floor.setVisible(false);
@@ -580,9 +648,9 @@ function spawnLevel(index) {
         p.body.checkCollision.right = false;
         levelObjects.platforms.push(p);
 
-        if (Phaser.Math.Between(0, 100) < 80) {
+        if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
             let coin = sootCoins.create(pos.x, pos.y - 50, 'sootcoin');
-            coin.setScale(0.7);
+            coin.setScale(COIN.SCALE);
             levelObjects.coins.push(coin);
         }
     }
@@ -591,11 +659,11 @@ function spawnLevel(index) {
 
     // --- PLATFORM & BLOCK GENERATION ---
     if (currentLevel === 1) {
-        // Level 2: three lead-up platforms to one larger platform with all 3 word blocks above it.
+        // Round 2: three lead-up platforms to one larger platform with all 3 word blocks above it.
         const leadUpPlatforms = [
             { x: startX + 360, y: 390 },
-            { x: startX + 520, y: 290 },
-            { x: startX + 680, y: 190 }
+            { x: startX + 540, y: 290 },
+            { x: startX + 720, y: 190 }
         ];
 
         for (let i = 0; i < leadUpPlatforms.length; i++) {
@@ -607,9 +675,9 @@ function spawnLevel(index) {
             platform.body.checkCollision.right = false;
             levelObjects.platforms.push(platform);
 
-            if (Phaser.Math.Between(0, 100) < 80) {
+            if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
                 let coin = sootCoins.create(pos.x, pos.y - 50, 'sootcoin');
-                coin.setScale(0.7);
+                coin.setScale(COIN.SCALE);
                 levelObjects.coins.push(coin);
             }
         }
@@ -645,7 +713,7 @@ function spawnLevel(index) {
         audioTriggerX = finalPlatformX - 700;
 
     } else if (currentLevel < 3) {
-        // Levels 1–3: Staircase up to one wide platform
+        // Rounds 1–3: Staircase up to one wide platform
         const numPlatforms = Math.min(Math.max(currentLevel + 2, 2), 4);
         let blockY = 220;
         let blockXBase = startX + 1800;
@@ -666,9 +734,9 @@ function spawnLevel(index) {
                 platform.body.checkCollision.right = false;
                 levelObjects.platforms.push(platform);
 
-                if (Phaser.Math.Between(0, 100) < 80) {
+                if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
                     let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
-                    coin.setScale(0.7);
+                    coin.setScale(COIN.SCALE);
                     levelObjects.coins.push(coin);
                 }
 
@@ -703,7 +771,7 @@ function spawnLevel(index) {
         audioTriggerX = blockXBase - 700;
 
     } else {
-        // Levels 4+: Three separate elevated platforms for blocks
+        // Rounds 4+: Three separate elevated platforms for blocks
         let leadUpPlatX = startX + 1000;
         let leadUpPlatY = 420;
         for (let i = 0; i < 3; i++) {
@@ -714,8 +782,8 @@ function spawnLevel(index) {
             p.body.checkCollision.right = false;
             levelObjects.platforms.push(p);
 
-            if (Phaser.Math.Between(0, 100) < 80) {
-                let coin = sootCoins.create(leadUpPlatX, leadUpPlatY - 50, 'sootcoin').setScale(0.7);
+            if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
+                let coin = sootCoins.create(leadUpPlatX, leadUpPlatY - 50, 'sootcoin').setScale(COIN.SCALE);
                 levelObjects.coins.push(coin);
             }
             leadUpPlatX += 240;
@@ -764,7 +832,7 @@ function spawnLevel(index) {
     for (let i = 0; i < 3; i++) {
         let cx = startX + 400 + (i * 150);
         let coin = sootCoins.create(cx, 450, 'sootcoin');
-        coin.setScale(0.7);
+        coin.setScale(COIN.SCALE);
         levelObjects.coins.push(coin);
     }
 
@@ -779,12 +847,12 @@ function spawnLevel(index) {
         mike.setScale(0.64);
         mike.setCollideWorldBounds(true);
         mike.startX = mikeX;
-        mike.setVelocityX(-30);
+        mike.setVelocityX(-ENEMY.PATROL_SPEED);
         mike.setFlipX(true);
         mike.anims.play('mikeWalk');
     }
 
-    // Store level objects for cleanup when 2 levels ahead is reached
+    // Store level objects for cleanup when 2 rounds ahead is reached
     levelObjectsMap[index] = levelObjects;
 }
 
@@ -824,7 +892,7 @@ function hitBlock(player, block) {
             if (score > 0) {
                 const coinsToShow = Math.min(score, 20);
                 for (let i = 0; i < coinsToShow; i++) {
-                    let coin = this.add.image(config.width / 2, 100, 'sootcoin').setScrollFactor(0).setScale(0.7);
+                    let coin = this.add.image(config.width / 2, 100, 'sootcoin').setScrollFactor(0).setScale(COIN.SCALE);
                     this.tweens.add({
                         targets: coin,
                         x: -100,
@@ -833,12 +901,30 @@ function hitBlock(player, block) {
                     });
                 }
                 score = 0;
-                scoreText.setText('Soot Sprites: ' + score);
+                scoreText.setText(UI.SCORE_PREFIX + score);
             }
         }
     }
 }
 
+function hitLevelCompleteBlock(player, block) {
+     if (!levelComplete) {
+        levelComplete = true;
+        this.physics.pause();
+
+        // Display total soot sprites and Mikes defeated
+        const totalSprites = score;
+        const totalMikes = 5; //replace with actual count
+
+        const gameOverText = this.add.text(config.width / 2, config.height / 2 - 50, 'LEVEL 1 COMPLETE!', { fontSize: '48px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
+        const spriteText = this.add.text(config.width / 2, config.height / 2 + 20, 'Total Soot Sprites: ' + totalSprites, { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
+        const mikesText = this.add.text(config.width / 2, config.height / 2 + 60, 'Total Mr. M\'s Defeated = ' + totalMikes, { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
+
+        gameOverText.setScrollFactor(0);
+        spriteText.setScrollFactor(0);
+        mikesText.setScrollFactor(0);
+    }
+}
 // Called when player touches Mike
 function hitEnemy(_player, _enemy) {
     if (isDead) return;
@@ -865,7 +951,7 @@ function collectCoin(_player, coin) {
     coin.destroy();
     playCoinSound();
     score += 1;
-    scoreText.setText('Soot Sprites: ' + score);
+    scoreText.setText(UI.SCORE_PREFIX + score);
 }
 
 // --- AUDIO HELPERS ---
@@ -919,6 +1005,28 @@ function playJumpSound() {
 
     osc.start();
     osc.stop(ctx.currentTime + 0.2);
+}
+
+function playSmashHitSound() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+    osc.start(now);
+    osc.stop(now + 0.1);
 }
 
 function playCrashSound() {
