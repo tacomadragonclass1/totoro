@@ -24,6 +24,22 @@ window.addEventListener('load', function () {
         window.location.reload();
     });
 
+    document.getElementById('goLevel1Btn').addEventListener('click', function () {
+        if (window.backgroundMusic) window.backgroundMusic.stop();
+        currentRound = 0;
+        currentGameLevel = 1;
+        mikesDefeated = 0;
+        game.scene.scenes[0].scene.restart();
+    });
+
+    document.getElementById('goLevel2Btn').addEventListener('click', function () {
+        if (window.backgroundMusic) window.backgroundMusic.stop();
+        currentRound = 0;
+        currentGameLevel = 2;
+        mikesDefeated = 0;
+        game.scene.scenes[0].scene.restart();
+    });
+
     // --- New Game Controls ---
 
     // For movement buttons, we need to track pointer down and up

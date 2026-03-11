@@ -33,7 +33,7 @@ const LEVEL = {
 };
 
 const UI = {
-    LEVEL_PREFIX: 'Round: ',
+    ROUND_PREFIX: 'Round: ',
     SCORE_PREFIX: 'Soot Sprites: '
 };
 
@@ -69,8 +69,8 @@ let wordBlocks;
 let textGroup;
 let bg1, bg2, fg;
 let debrisEmitter;
-let currentLevel = 0;
-let levelText;
+let currentRound = 0;
+let roundText;
 let enemies;
 let sootCoins;
 let score = 0;
@@ -82,12 +82,21 @@ let flowerEmitter;
 let sparkleEmitter;
 let ctrlKey;
 let isSmashing = false;
-let levelComplete = false;
-let levelCompleteBlock;
+let roundComplete = false;
+let roundCompleteBlock;
 let isDead = false;
 let backgroundMusic;
-let activeLevels;
-let levelObjectsMap = {};
+let activeRounds;
+let roundObjectsMap = {};
+let lives = 0;
+let lifeIcons = [];
+let isInvincible = false;
+let coinsForLife = 0;
+let sceneRef = null;
+let currentGameLevel = 1;
+let mikesDefeated = 0;
+let endBlock = null;
+let endBlockLabel = null;
 let worldTopExtent = 800;
 let activeCastle = null;
 let pendingCastleStartX = null;
@@ -96,8 +105,8 @@ const skyCastleParallaxY = 1;
 const skyCastleBaseXInLevel = 900;
 const skyCastleBaseY = -220;
 
-// --- LEVEL DATA ---
-const levels = [
+// --- ROUND DATA ---
+const rounds = [
     { target: "CAT", options: ["BAT", "CAT", "RAT"] },
     { target: "DOG", options: ["DOG", "LOG", "FOG"] },
     { target: "SUN", options: ["RUN", "SUN", "FUN"] },
@@ -114,6 +123,8 @@ const levels = [
 function preload() {
     this.load.image('bg1', 'assets/background1.png');
     this.load.image('bg2', 'assets/background2.png');
+    this.load.image('l2bg1', 'assets/l2background1.png');
+    this.load.image('l2bg2', 'assets/l2background2.png');
     this.load.image('brickpath', 'assets/brickpath.png');
     this.load.image('bubbleblock1', 'assets/bubbleblock1.png');
     this.load.image('bubbleblock2', 'assets/bubbleblock2.png');
@@ -153,10 +164,15 @@ function create() {
     score = 0;
     isSmashing = false;
     isDead = false;
-    levelComplete = false;
-    levelObjectsMap = {};
+    roundComplete = false;
+    roundObjectsMap = {};
     activeCastle = null;
     pendingCastleStartX = null;
+    lives = 0;
+    lifeIcons = [];
+    isInvincible = false;
+    coinsForLife = 0;
+    sceneRef = this;
 
     window.leftButtonPressed = false;
     window.rightButtonPressed = false;
@@ -170,21 +186,24 @@ function create() {
     };
 
     // Shuffle a copy so the original array is never mutated
-    activeLevels = Phaser.Utils.Array.Shuffle([...levels]);
+    activeRounds = Phaser.Utils.Array.Shuffle([...rounds]);
 
     // 1. Add Parallax Backgrounds
-    const bg1Source = this.textures.get('bg1').getSourceImage();
+    const bg1Key = currentGameLevel === 1 ? 'bg1' : 'l2bg1';
+    const bg2Key = currentGameLevel === 1 ? 'bg2' : 'l2bg2';
+
+    const bg1Source = this.textures.get(bg1Key).getSourceImage();
     const bg1Width = bg1Source.width || config.width;
     const bg1Height = bg1Source.height || config.height;
-    const bg2Height = this.textures.get('bg2').getSourceImage().height || 600;
+    const bg2Height = this.textures.get(bg2Key).getSourceImage().height || 600;
     const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
 
     // bg1 (sky): use a single vertically non-repeating slice by matching tileSprite height
     // to exactly one scaled texture height, then bottom-align it to ground level.
-    // Keep horizontal tiling for long side-scrolling levels.
+    // Keep horizontal tiling for long side-scrolling rounds.
     const bgScale = config.width / bg1Width;
     const bg1ScaledHeight = bg1Height * bgScale;
-    bg1 = this.add.tileSprite(0, config.height, 30000, bg1ScaledHeight, 'bg1').setOrigin(0, 1);
+    bg1 = this.add.tileSprite(0, config.height, 30000, bg1ScaledHeight, bg1Key).setOrigin(0, 1);
     bg1.setTileScale(bgScale);
     bg1.setScrollFactor(0.3, 1);
     bg1.setDepth(-30);
@@ -194,7 +213,7 @@ function create() {
 
     // bg2 (terrain silhouette): world-space, anchored to the bottom of the game area.
     // Scrolls off the bottom of the screen as the camera moves up.
-    bg2 = this.add.tileSprite(0, config.height, 30000, bg2Height, 'bg2').setOrigin(0, 1);
+    bg2 = this.add.tileSprite(0, config.height, 30000, bg2Height, bg2Key).setOrigin(0, 1);
     bg2.setScrollFactor(0.7, 1);
     bg2.setDepth(-10);
 
@@ -306,7 +325,7 @@ function create() {
     // Y bounds extend above y=0 to allow high jumps/platforms.
     // Max scrollY is clamped to 0, so during normal gameplay the camera follows upward
     // into negative Y, then back down to ground level.
-    // spawnLevel expands the X bounds as new levels are added.
+    // spawnRound expands the X bounds as new rounds are added.
     this.physics.world.setBounds(0, -worldTopExtent, 3000, config.height + worldTopExtent);
     this.cameras.main.setBounds(0, -worldTopExtent, 3000, config.height + worldTopExtent);
     this.cameras.main.startFollow(player, true, 0.5, 0.5);
@@ -333,15 +352,15 @@ function create() {
     this.physics.add.collider(player, floors);
     this.physics.add.collider(player, wordBlocks, hitBlock, null, this);
     this.physics.add.collider(enemies, floors);
-    this.physics.add.collider(player, levelCompleteBlock, hitLevelCompleteBlock, null, this);
+    this.physics.add.collider(player, roundCompleteBlock, hitRoundCompleteBlock, null, this);
     this.physics.add.collider(player, enemies, hitEnemy, null, this);
     this.physics.add.collider(sootCoins, platforms);
     this.physics.add.collider(sootCoins, floors);
     this.physics.add.overlap(player, sootCoins, collectCoin, null, this);
 
     // 8. UI Text
-    levelText = this.add.text(16, 16, UI.LEVEL_PREFIX + (currentLevel + 1), { fontSize: '32px', fill: '#000' });
-    levelText.setScrollFactor(0);
+    roundText = this.add.text(16, 16, UI.ROUND_PREFIX + (currentRound + 1), { fontSize: '32px', fill: '#000' });
+    roundText.setScrollFactor(0);
 
     scoreText = this.add.text(config.width - 16, 16, UI.SCORE_PREFIX + score, {
         fontSize: '32px',
@@ -353,8 +372,8 @@ function create() {
     scoreText.setOrigin(1, 0);
     scoreText.setScrollFactor(0);
 
-    // 9. Start the first level
-    spawnLevel.call(this, 0);
+    // 9. Start the first round
+    spawnRound.call(this, 0);
 }
 
 
@@ -409,6 +428,7 @@ function update() {
                     if (dist > 0 && dist < hitRange) {
                         const mx = mike.x, my = mike.y;
                         mike.destroy();
+                        mikesDefeated++;
                         playSmashHitSound();
                         debrisEmitter.explode(30, mx, my);
                         sparkleEmitter.explode(15, player.x + hitRange, player.y);
@@ -417,6 +437,7 @@ function update() {
                     if (dist < 0 && dist > -(hitRange + 10)) {
                         const mx = mike.x, my = mike.y;
                         mike.destroy();
+                        mikesDefeated++;
                         playSmashHitSound();
                         debrisEmitter.explode(30, mx, my);
                         sparkleEmitter.explode(15, player.x - hitRange, player.y);
@@ -427,7 +448,7 @@ function update() {
     } else {
         // 3. Player Movement — only when not smashing
 
-         if (levelComplete) {
+         if (roundComplete) {
             player.setVelocityX(50); // Gentle nudge towards the final block
             return; // Stop normal movement
         }
@@ -504,7 +525,7 @@ function update() {
 
     // 7. Audio Trigger for Target Word
     if (!wordSpoken && player.x > audioTriggerX) {
-        const data = activeLevels[currentLevel % activeLevels.length];
+        const data = activeRounds[currentRound % activeRounds.length];
         const soundKey = data.target.toLowerCase().trim();
         if (this.cache.audio.exists(soundKey)) {
             this.sound.play(soundKey);
@@ -517,7 +538,7 @@ function update() {
 
 function getCastleWorldX(startX) {
     // For parallax layers, world X must be offset by scrollFactor to keep a stable
-    // on-screen placement per level segment.
+    // on-screen placement per round segment.
     return skyCastleBaseXInLevel + (startX * skyCastleParallaxX);
 }
 
@@ -549,7 +570,7 @@ function updateCastleLifecycle() {
     );
 
     if (onGroundFloor) {
-        const currentStartX = currentLevel * LEVEL.WIDTH;
+        const currentStartX = currentRound * LEVEL.WIDTH;
         if (!activeCastle || !activeCastle.active || isCastleOffscreen(this, activeCastle)) {
             if (activeCastle && activeCastle.active) activeCastle.destroy();
             activeCastle = spawnCastle(this, currentStartX);
@@ -575,37 +596,42 @@ function updateCastleLifecycle() {
     }
 }
 
-function createLevelCompleteBlock(scene, startX) {
+function createRoundCompleteBlock(scene, startX) {
     const x = startX + LEVEL.WIDTH - 200;
     const y = config.height - 200;
-    levelCompleteBlock = scene.physics.add.staticSprite(x, y, 'bubbleblock1');
-    levelCompleteBlock.setDisplaySize(200, 80).refreshBody();
-    levelCompleteBlock.word = "END OF LEVEL 1";
-    return levelCompleteBlock;
+    roundCompleteBlock = scene.physics.add.staticSprite(x, y, 'bubbleblock1');
+    roundCompleteBlock.setDisplaySize(200, 80).refreshBody();
+    roundCompleteBlock.word = "END";
+    return roundCompleteBlock;
 }
 
-function spawnLevel(index) {
-    currentLevel = index;
-    levelText.setText(UI.LEVEL_PREFIX + (currentLevel + 1));
+function spawnRound(index) {
+    if (index >= rounds.length) {
+        spawnLevelEnd.call(this);
+        return;
+    }
+
+    currentRound = index;
+    roundText.setText(UI.ROUND_PREFIX + (currentRound + 1));
 
     // Clean up objects from 2 rounds back — the player has moved well past them.
     const cleanupIndex = index - 2;
-    if (cleanupIndex >= 0 && levelObjectsMap[cleanupIndex]) {
-        const old = levelObjectsMap[cleanupIndex];
+    if (cleanupIndex >= 0 && roundObjectsMap[cleanupIndex]) {
+        const old = roundObjectsMap[cleanupIndex];
         if (old.floor && old.floor.active) old.floor.destroy();
         old.platforms.forEach(p => { if (p && p.active) p.destroy(); });
         old.wordBlocks.forEach(b => { if (b && b.active) b.destroy(); });
         old.texts.forEach(t => { if (t && t.active) t.destroy(); });
         old.coins.forEach(c => { if (c && c.active) c.destroy(); });
-        delete levelObjectsMap[cleanupIndex];
+        delete roundObjectsMap[cleanupIndex];
 
-        if (levelCompleteBlock && levelCompleteBlock.active) levelCompleteBlock.destroy();
+        if (roundCompleteBlock && roundCompleteBlock.active) roundCompleteBlock.destroy();
     }
 
     // Bucket to track all objects created this round for later cleanup
-    const levelObjects = { floor: null, platforms: [], wordBlocks: [], texts: [], coins: [] };
+    const roundObjects = { floor: null, platforms: [], wordBlocks: [], texts: [], coins: [] };
 
-    const startX = currentLevel * LEVEL.WIDTH;
+    const startX = currentRound * LEVEL.WIDTH;
 
     // Expand world and camera bounds to include the new round area.
     const newMaxX = startX + LEVEL.WIDTH;
@@ -616,8 +642,8 @@ function spawnLevel(index) {
         activeCastle = spawnCastle(this, startX);
     } else {
          if (index === 10) {
-            // Last level, create END text
-             createLevelCompleteBlock(this, startX);
+            // Last round, create END text
+             createRoundCompleteBlock(this, startX);
         }
 
         pendingCastleStartX = startX;
@@ -629,10 +655,11 @@ function spawnLevel(index) {
     floor.setVisible(false);
     this.physics.add.existing(floor, true);
     floors.add(floor);
-    levelObjects.floor = floor;
+    roundObjects.floor = floor;
 
     // --- JUMP OVER MIKE PLATFORMS ---
-    const jumpPlatforms = [
+    // Skipped for round 2, which has its own lead-up staircase.
+    const jumpPlatforms = currentRound === 1 ? [] : [
         { x: startX + 250, y: 480 },
         { x: startX + 430, y: 390 },
         { x: startX + 610, y: 300 }
@@ -646,21 +673,22 @@ function spawnLevel(index) {
         p.body.checkCollision.down = false;
         p.body.checkCollision.left = false;
         p.body.checkCollision.right = false;
-        levelObjects.platforms.push(p);
+        roundObjects.platforms.push(p);
 
         if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
             let coin = sootCoins.create(pos.x, pos.y - 50, 'sootcoin');
             coin.setScale(COIN.SCALE);
-            levelObjects.coins.push(coin);
+            roundObjects.coins.push(coin);
         }
     }
 
-    const data = activeLevels[currentLevel % activeLevels.length];
+    const data = activeRounds[currentRound % activeRounds.length];
 
     // --- PLATFORM & BLOCK GENERATION ---
-    if (currentLevel === 1) {
+    if (currentRound === 1) {
         // Round 2: three lead-up platforms to one larger platform with all 3 word blocks above it.
         const leadUpPlatforms = [
+            { x: startX + 200, y: 480 },
             { x: startX + 360, y: 390 },
             { x: startX + 540, y: 290 },
             { x: startX + 720, y: 190 }
@@ -673,12 +701,12 @@ function spawnLevel(index) {
             platform.body.checkCollision.down = false;
             platform.body.checkCollision.left = false;
             platform.body.checkCollision.right = false;
-            levelObjects.platforms.push(platform);
+            roundObjects.platforms.push(platform);
 
             if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
                 let coin = sootCoins.create(pos.x, pos.y - 50, 'sootcoin');
                 coin.setScale(COIN.SCALE);
-                levelObjects.coins.push(coin);
+                roundObjects.coins.push(coin);
             }
         }
 
@@ -689,7 +717,7 @@ function spawnLevel(index) {
         finalPlatform.body.checkCollision.down = false;
         finalPlatform.body.checkCollision.left = false;
         finalPlatform.body.checkCollision.right = false;
-        levelObjects.platforms.push(finalPlatform);
+        roundObjects.platforms.push(finalPlatform);
 
         const blockY = finalPlatformY - 190;
         const positions = [finalPlatformX - 180, finalPlatformX, finalPlatformX + 180];
@@ -701,20 +729,20 @@ function spawnLevel(index) {
             let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
             block.setOrigin(0.5, 1).refreshBody();
             block.word = data.options[i];
-            levelObjects.wordBlocks.push(block);
+            roundObjects.wordBlocks.push(block);
 
             let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
             text.setOrigin(0.5);
             textGroup.add(text);
             block.textObject = text;
-            levelObjects.texts.push(text);
+            roundObjects.texts.push(text);
         }
 
         audioTriggerX = finalPlatformX - 700;
 
-    } else if (currentLevel < 3) {
+    } else if (currentRound < 3) {
         // Rounds 1–3: Staircase up to one wide platform
-        const numPlatforms = Math.min(Math.max(currentLevel + 2, 2), 4);
+        const numPlatforms = Math.min(Math.max(currentRound + 2, 2), 4);
         let blockY = 220;
         let blockXBase = startX + 1800;
 
@@ -732,12 +760,12 @@ function spawnLevel(index) {
                 platform.body.checkCollision.down = false;
                 platform.body.checkCollision.left = false;
                 platform.body.checkCollision.right = false;
-                levelObjects.platforms.push(platform);
+                roundObjects.platforms.push(platform);
 
                 if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
                     let coin = sootCoins.create(currentPlatX, platY - 50, 'sootcoin');
                     coin.setScale(COIN.SCALE);
-                    levelObjects.coins.push(coin);
+                    roundObjects.coins.push(coin);
                 }
 
                 if (isFinalPlatform) {
@@ -759,13 +787,13 @@ function spawnLevel(index) {
             let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
             block.setOrigin(0.5, 1).refreshBody();
             block.word = data.options[i];
-            levelObjects.wordBlocks.push(block);
+            roundObjects.wordBlocks.push(block);
 
             let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
             text.setOrigin(0.5);
             textGroup.add(text);
             block.textObject = text;
-            levelObjects.texts.push(text);
+            roundObjects.texts.push(text);
         }
 
         audioTriggerX = blockXBase - 700;
@@ -780,11 +808,11 @@ function spawnLevel(index) {
             p.body.checkCollision.down = false;
             p.body.checkCollision.left = false;
             p.body.checkCollision.right = false;
-            levelObjects.platforms.push(p);
+            roundObjects.platforms.push(p);
 
             if (Phaser.Math.Between(0, 100) < COIN.SPAWN_CHANCE) {
                 let coin = sootCoins.create(leadUpPlatX, leadUpPlatY - 50, 'sootcoin').setScale(COIN.SCALE);
-                levelObjects.coins.push(coin);
+                roundObjects.coins.push(coin);
             }
             leadUpPlatX += 240;
             leadUpPlatY -= 120;
@@ -805,7 +833,7 @@ function spawnLevel(index) {
             platform.body.checkCollision.down = false;
             platform.body.checkCollision.left = false;
             platform.body.checkCollision.right = false;
-            levelObjects.platforms.push(platform);
+            roundObjects.platforms.push(platform);
 
             let x = pos.x;
             let y = pos.y - 190;
@@ -814,13 +842,13 @@ function spawnLevel(index) {
             let block = wordBlocks.create(x, y + (bHeight / 2), 'bubbleblock1');
             block.setOrigin(0.5, 1).refreshBody();
             block.word = data.options[i];
-            levelObjects.wordBlocks.push(block);
+            roundObjects.wordBlocks.push(block);
 
             let text = this.add.text(x, y, data.options[i], { fontSize: '24px', fill: '#ffffff', fontStyle: 'bold' });
             text.setOrigin(0.5);
             textGroup.add(text);
             block.textObject = text;
-            levelObjects.texts.push(text);
+            roundObjects.texts.push(text);
         }
 
         audioTriggerX = startX + 1500 - 700;
@@ -833,13 +861,13 @@ function spawnLevel(index) {
         let cx = startX + 400 + (i * 150);
         let coin = sootCoins.create(cx, 450, 'sootcoin');
         coin.setScale(COIN.SCALE);
-        levelObjects.coins.push(coin);
+        roundObjects.coins.push(coin);
     }
 
     // --- SPAWN MIKE (BAD GUY) ---
     let numMikes = 1;
-    if (currentLevel >= 4) numMikes = 2;
-    if (currentLevel >= 7) numMikes = 3;
+    if (currentRound >= 4) numMikes = 2;
+    if (currentRound >= 7) numMikes = 3;
 
     for (let i = 0; i < numMikes; i++) {
         let mikeX = startX + 600 + (i * 400);
@@ -852,14 +880,14 @@ function spawnLevel(index) {
         mike.anims.play('mikeWalk');
     }
 
-    // Store level objects for cleanup when 2 rounds ahead is reached
-    levelObjectsMap[index] = levelObjects;
+    // Store round objects for cleanup when 2 rounds ahead is reached
+    roundObjectsMap[index] = roundObjects;
 }
 
 // Called when player hits the bottom of a block (jumping up)
 function hitBlock(player, block) {
     if (player.body.touching.up && block.body.touching.down) {
-        const data = activeLevels[currentLevel % activeLevels.length];
+        const data = activeRounds[currentRound % activeRounds.length];
 
         if (block.word === data.target) {
             // CORRECT!
@@ -870,7 +898,7 @@ function hitBlock(player, block) {
             this.time.delayedCall(400, () => { if (block.active) block.setTexture('bubbleblock3'); });
             this.time.delayedCall(600, () => { if (block.active) block.setTexture('bubbleblock4'); });
 
-            spawnLevel.call(this, currentLevel + 1);
+            spawnRound.call(this, currentRound + 1);
 
         } else {
             // INCORRECT!
@@ -907,16 +935,16 @@ function hitBlock(player, block) {
     }
 }
 
-function hitLevelCompleteBlock(player, block) {
-     if (!levelComplete) {
-        levelComplete = true;
+function hitRoundCompleteBlock(player, block) {
+     if (!roundComplete) {
+        roundComplete = true;
         this.physics.pause();
 
         // Display total soot sprites and Mikes defeated
         const totalSprites = score;
         const totalMikes = 5; //replace with actual count
 
-        const gameOverText = this.add.text(config.width / 2, config.height / 2 - 50, 'LEVEL 1 COMPLETE!', { fontSize: '48px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
+        const gameOverText = this.add.text(config.width / 2, config.height / 2 - 50, 'GAME COMPLETE!', { fontSize: '48px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
         const spriteText = this.add.text(config.width / 2, config.height / 2 + 20, 'Total Soot Sprites: ' + totalSprites, { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
         const mikesText = this.add.text(config.width / 2, config.height / 2 + 60, 'Total Mr. M\'s Defeated = ' + totalMikes, { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
 
@@ -928,7 +956,15 @@ function hitLevelCompleteBlock(player, block) {
 // Called when player touches Mike
 function hitEnemy(_player, _enemy) {
     if (isDead) return;
+    if (isInvincible) return;
     if (!this.physics) return;
+
+    if (lives > 0) {
+        lives--;
+        updateLifeIcons(this);
+        respawnPlayer(this);
+        return;
+    }
 
     isDead = true;
     playCrashSound();
@@ -941,7 +977,9 @@ function hitEnemy(_player, _enemy) {
     }
 
     this.time.delayedCall(1000, () => {
-        currentLevel = 0;
+        currentRound = 0;
+        currentGameLevel = 1;
+        mikesDefeated = 0;
         this.scene.restart();
     });
 }
@@ -951,7 +989,127 @@ function collectCoin(_player, coin) {
     coin.destroy();
     playCoinSound();
     score += 1;
+    coinsForLife += 1;
     scoreText.setText(UI.SCORE_PREFIX + score);
+    if (coinsForLife % 10 === 0) {
+        lives++;
+        updateLifeIcons(this);
+    }
+}
+
+function spawnLevelEnd() {
+    const startX = rounds.length * LEVEL.WIDTH;
+
+    // Expand world bounds to cover the end zone
+    const newMaxX = startX + LEVEL.WIDTH;
+    this.physics.world.setBounds(0, -worldTopExtent, newMaxX, config.height + worldTopExtent);
+    this.cameras.main.setBounds(0, -worldTopExtent, newMaxX, config.height + worldTopExtent);
+
+    // Invisible floor for this zone
+    const fgHeight = this.textures.get('brickpath').getSourceImage().height || 50;
+    const floor = this.add.rectangle(startX + 1200, config.height - (fgHeight / 2), 2400, fgHeight, 0x2E8B57);
+    floor.setVisible(false);
+    this.physics.add.existing(floor, true);
+    floors.add(floor);
+
+    // End block — placed at a height reachable from the ground
+    const blockX = startX + 700;
+    const blockBottomY = 370;
+    endBlock = this.physics.add.staticSprite(blockX, blockBottomY, 'bubbleblock1');
+    endBlock.setDisplaySize(280, 80);
+    endBlock.setOrigin(0.5, 1);
+    endBlock.refreshBody();
+    endBlock.phase = 0; // 0 = LEVEL 1 COMPLETE, 1 = GO TO LEVEL 2
+
+    endBlockLabel = this.add.text(blockX, blockBottomY - 40, 'LEVEL 1\nCOMPLETE', {
+        fontSize: '20px', fill: '#ffffff', fontStyle: 'bold', align: 'center'
+    }).setOrigin(0.5);
+
+    this.physics.add.collider(player, endBlock, hitEndBlock, null, this);
+}
+
+function hitEndBlock(player, block) {
+    if (!(player.body.touching.up && block.body.touching.down)) return;
+
+    if (block.phase === 0) {
+        block.body.enable = false;
+        block.phase = 1;
+        showLevelCompleteOverlay.call(this);
+
+    } else if (block.phase === 1) {
+        block.body.enable = false;
+        currentGameLevel = 2;
+        currentRound = 0;
+        mikesDefeated = 0;
+        if (window.backgroundMusic) window.backgroundMusic.stop();
+        this.scene.restart();
+    }
+}
+
+function showLevelCompleteOverlay() {
+    // Flash the screen white briefly
+    const flash = this.add.rectangle(config.width / 2, config.height / 2, config.width, config.height, 0xffffff, 1);
+    flash.setScrollFactor(0).setDepth(200);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 400, onComplete: () => flash.destroy() });
+
+    // Dark overlay
+    const overlay = this.add.rectangle(config.width / 2, config.height / 2, config.width, config.height, 0x000000, 0.75);
+    overlay.setScrollFactor(0).setDepth(100);
+
+    const title = this.add.text(config.width / 2, config.height / 2 - 90, 'LEVEL 1 COMPLETE!', {
+        fontSize: '52px', fill: '#fff', stroke: '#000', strokeThickness: 6, fontFamily: 'Arial'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+
+    const spritesText = this.add.text(config.width / 2, config.height / 2, `Total Soot Sprites: ${score}`, {
+        fontSize: '34px', fill: '#FFD700', stroke: '#000', strokeThickness: 4, fontFamily: 'Arial'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+
+    const mikesText = this.add.text(config.width / 2, config.height / 2 + 60, `Mr. M's Defeated: ${mikesDefeated}`, {
+        fontSize: '34px', fill: '#FFD700', stroke: '#000', strokeThickness: 4, fontFamily: 'Arial'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+
+    // After 10 seconds remove overlay and flip the block to "GO TO LEVEL 2"
+    this.time.delayedCall(10000, () => {
+        overlay.destroy();
+        title.destroy();
+        spritesText.destroy();
+        mikesText.destroy();
+        if (endBlockLabel && endBlockLabel.active) endBlockLabel.setText('GO TO\nLEVEL 2');
+        if (endBlock && endBlock.active) endBlock.body.enable = true;
+    });
+}
+
+function updateLifeIcons(scene) {
+    lifeIcons.forEach(icon => { if (icon && icon.active) icon.destroy(); });
+    lifeIcons = [];
+    for (let i = 0; i < lives; i++) {
+        const icon = scene.add.image(16 + i * 34, 58, 'totoro1');
+        icon.setScale(0.4);
+        icon.setScrollFactor(0);
+        icon.setOrigin(0, 0);
+        lifeIcons.push(icon);
+    }
+}
+
+function respawnPlayer(scene) {
+    player.setPosition(player.x, config.height / 2);
+    player.setVelocity(0, 0);
+    player.clearTint();
+    player.setAlpha(1);
+    isInvincible = true;
+
+    // Flash for 5 seconds, then vulnerability returns
+    scene.tweens.add({
+        targets: player,
+        alpha: 0.1,
+        duration: 150,
+        yoyo: true,
+        repeat: 16,
+        onComplete: () => {
+            isInvincible = false;
+            player.setAlpha(1);
+        }
+    });
 }
 
 // --- AUDIO HELPERS ---
