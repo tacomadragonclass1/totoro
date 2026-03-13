@@ -66,4 +66,6 @@ window.addEventListener('load', function () {
         // Set a flag that the game's update loop will check
         window.smashButtonPressed = true;
     });
+    smashButton.addEventListener('pointerup', () => { window.smashButtonPressed = false; });
+    smashButton.addEventListener('pointerout', () => { window.smashButtonPressed = false; });
 });

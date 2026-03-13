@@ -32,6 +32,18 @@ const LEVEL = {
     WIDTH: 2400,
 };
 
+const HOWLS = {
+    SPEED_X: 38,           // stretched horizontal travel
+    SPEED_Y: 4,            // 50% slower depth travel
+    MIN_SCALE: 0.12,       // tiny when far away (high up)
+    MAX_SCALE: 2.2,        // huge when close (low)
+    MIN_Y: 384,            // ceiling = 216px from base of bg1 (600 - 216)
+    MAX_Y: 520,            // near ground
+    FRAME_RATE: 3,         // 50% slower cycle
+    DIR_CHANGE_MIN: 3000,
+    DIR_CHANGE_MAX: 8000,
+};
+
 const UI = {
     ROUND_PREFIX: 'Round: ',
     SCORE_PREFIX: 'Soot Sprites: '
@@ -100,6 +112,12 @@ let endBlockLabel = null;
 let worldTopExtent = 800;
 let activeCastle = null;
 let pendingCastleStartX = null;
+let howlsCastle = null;
+let howlsVelX = 0;
+let howlsVelY = 0;
+let howlsFrame = 0;
+let howlsFrameTimer = 0;
+let howlsDirTimer = 0;
 const skyCastleParallaxX = 0.34;
 const skyCastleParallaxY = 1;
 const skyCastleBaseXInLevel = 900;
@@ -125,6 +143,9 @@ function preload() {
     this.load.image('bg2', 'assets/background2.png');
     this.load.image('l2bg1', 'assets/l2background1.png');
     this.load.image('l2bg2', 'assets/l2background2.png');
+    this.load.image('howls1', 'assets/howls1.png');
+    this.load.image('howls2', 'assets/howls2.png');
+    this.load.image('howls3', 'assets/howls3.png');
     this.load.image('brickpath', 'assets/brickpath.png');
     this.load.image('bubbleblock1', 'assets/bubbleblock1.png');
     this.load.image('bubbleblock2', 'assets/bubbleblock2.png');
@@ -147,7 +168,7 @@ function preload() {
 
     this.load.audio('backgroundMusic', 'assets/backgroundmusic.mp3');
 
-    this.load.audio('cat', 'assets/CAT.wav');
+    this.load.audio('cat', 'assets/cat.wav');
     this.load.audio('big', 'assets/big.wav');
     this.load.audio('dog', 'assets/dog.wav');
     this.load.audio('fox', 'assets/fox.wav');
@@ -221,6 +242,14 @@ function create() {
     // of the screen when the camera moves up to show higher platforms.
     fg = this.add.tileSprite(0, config.height - fgHeight / 2, 30000, fgHeight, 'brickpath').setOrigin(0, 0.5);
     fg.setDepth(-5);
+
+    // Howl's Moving Castle — level 2 only
+    howlsCastle = null;
+    howlsFrame = 0;
+    howlsFrameTimer = 0;
+    if (currentGameLevel === 2) {
+        spawnHowlsCastle(this);
+    }
 
     // Play Background Music
     backgroundMusic = this.sound.add('backgroundMusic', { loop: true, volume: 0.5 });
@@ -385,6 +414,7 @@ function update() {
     // Parallax is handled automatically by setScrollFactor on each world-space tileSprite.
     // No manual tilePosition updates needed.
     updateCastleLifecycle.call(this);
+    if (currentGameLevel === 2) updateHowlsCastle.call(this);
 
     // 2. Smash Attack
     if ((ctrlKey.isDown || window.smashButtonPressed) && !isSmashing) {
@@ -535,6 +565,71 @@ function update() {
 }
 
 // --- CUSTOM FUNCTIONS ---
+
+function spawnHowlsCastle(scene) {
+    const startX = Phaser.Math.Between(100, config.width - 100);
+    const startY = Phaser.Math.Between(HOWLS.MIN_Y, HOWLS.MAX_Y);
+    howlsCastle = scene.add.image(startX, startY, 'howls1');
+    howlsCastle.setScrollFactor(0, 1); // X: screen-fixed (wandering); Y: world-space (stays down when camera pans up)
+    howlsCastle.setDepth(-18);      // between bg1 (-30) and bg2 (-10)
+    const t = (startY - HOWLS.MIN_Y) / (HOWLS.MAX_Y - HOWLS.MIN_Y);
+    howlsCastle.setScale(Phaser.Math.Linear(HOWLS.MIN_SCALE, HOWLS.MAX_SCALE, t));
+    howlsVelX = (Math.random() < 0.5 ? 1 : -1) * HOWLS.SPEED_X;
+    howlsVelY = (Math.random() < 0.5 ? 1 : -1) * HOWLS.SPEED_Y;
+    howlsDirTimer = Phaser.Math.Between(HOWLS.DIR_CHANGE_MIN, HOWLS.DIR_CHANGE_MAX);
+}
+
+function updateHowlsCastle() {
+    if (!howlsCastle || !howlsCastle.active) return;
+
+    const dt = this.sys.game.loop.delta;
+    const dtSec = dt / 1000;
+
+    // Animate frames
+    howlsFrameTimer += dt;
+    if (howlsFrameTimer >= 1000 / HOWLS.FRAME_RATE) {
+        howlsFrameTimer -= 1000 / HOWLS.FRAME_RATE;
+        howlsFrame = (howlsFrame + 1) % 3;
+        howlsCastle.setTexture('howls' + (howlsFrame + 1));
+    }
+
+    // Randomly change direction
+    howlsDirTimer -= dt;
+    if (howlsDirTimer <= 0) {
+        howlsVelX = (Math.random() < 0.5 ? 1 : -1) * HOWLS.SPEED_X;
+        howlsVelY = (Math.random() < 0.5 ? 1 : -1) * HOWLS.SPEED_Y;
+        howlsDirTimer = Phaser.Math.Between(HOWLS.DIR_CHANGE_MIN, HOWLS.DIR_CHANGE_MAX);
+    }
+
+    // Move
+    howlsCastle.x += howlsVelX * dtSec;
+    howlsCastle.y += howlsVelY * dtSec;
+
+    // Flip to face direction of travel
+    howlsCastle.setFlipX(howlsVelX < 0);
+
+    // Bounce off horizontal screen edges
+    if (howlsCastle.x < 60) {
+        howlsCastle.x = 60;
+        howlsVelX = Math.abs(howlsVelX);
+    } else if (howlsCastle.x > config.width - 60) {
+        howlsCastle.x = config.width - 60;
+        howlsVelX = -Math.abs(howlsVelX);
+    }
+
+    // Bounce off vertical bounds
+    if (howlsCastle.y < HOWLS.MIN_Y) {
+        howlsCastle.y = HOWLS.MIN_Y;
+        howlsVelY = Math.abs(howlsVelY);
+    } else if (howlsCastle.y > HOWLS.MAX_Y) {
+        howlsCastle.y = HOWLS.MAX_Y;
+        howlsVelY = -Math.abs(howlsVelY);
+    }
+
+    // Scale by Y — higher up = smaller (far away), lower = bigger (closer)
+    const t = (howlsCastle.y - HOWLS.MIN_Y) / (HOWLS.MAX_Y - HOWLS.MIN_Y);
+    howlsCastle.setScale(Phaser.Math.Linear(HOWLS.MIN_SCALE, HOWLS.MAX_SCALE, t));
+}
 
 function getCastleWorldX(startX) {
     // For parallax layers, world X must be offset by scrollFactor to keep a stable
