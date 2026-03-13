@@ -33,15 +33,19 @@ const LEVEL = {
 };
 
 const HOWLS = {
-    SPEED_X: 38,           // stretched horizontal travel
-    SPEED_Y: 4,            // 50% slower depth travel
+    SPEED_X: 38,           // horizontal travel speed (px/sec, screen-space)
+    SPEED_Y: 8,            // max depth travel speed (px/sec) — modulated by depth
     MIN_SCALE: 0.12,       // tiny when far away (high up)
     MAX_SCALE: 2.2,        // huge when close (low)
     MIN_Y: 384,            // ceiling = 216px from base of bg1 (600 - 216)
     MAX_Y: 520,            // near ground
-    FRAME_RATE: 3,         // 50% slower cycle
+    FRAME_RATE: 3,         // animation cycle speed
     DIR_CHANGE_MIN: 3000,
     DIR_CHANGE_MAX: 8000,
+    WANDER_X: 700,         // how far off either screen edge Howl can wander
+    PARALLAX_X: 0.45,      // fraction of camera scroll that drifts Howl left — at player speed (160px/s),
+                           // this creates ~72px/s leftward drift that Howl's own speed (38px/s) can't fully fight,
+                           // so running right slowly pushes him off, running left or standing still lets him return
 };
 
 const UI = {
@@ -94,8 +98,6 @@ let flowerEmitter;
 let sparkleEmitter;
 let ctrlKey;
 let isSmashing = false;
-let roundComplete = false;
-let roundCompleteBlock;
 let isDead = false;
 let backgroundMusic;
 let activeRounds;
@@ -118,6 +120,7 @@ let howlsVelY = 0;
 let howlsFrame = 0;
 let howlsFrameTimer = 0;
 let howlsDirTimer = 0;
+let howlsOffScreenTimer = 0;
 const skyCastleParallaxX = 0.34;
 const skyCastleParallaxY = 1;
 const skyCastleBaseXInLevel = 900;
@@ -135,6 +138,19 @@ const rounds = [
     { target: "SKY", options: ["SKY", "FLY", "DRY"] },
     { target: "FOX", options: ["BOX", "FOX", "POX"] },
     { target: "JAM", options: ["HAM", "JAM", "DAM"] }
+];
+
+const level2Rounds = [
+    { target: "THIS", options: ["THAT", "THIS", "THE"], soundKey: "tw_this" },
+    { target: "THAT", options: ["THIS", "THAT", "THE"], soundKey: "tw_that" },
+    { target: "THE", options: ["THIS", "THE", "THAT"], soundKey: "tw_the" },
+    { target: "LOOK", options: ["BOOK", "LOOK", "TOOK"], soundKey: "tw_look" },
+    { target: "SAID", options: ["SAID", "SED", "SAD"], soundKey: "tw_said" },
+    { target: "YOU", options: ["YUE", "YOU", "UYE"], soundKey: "tw_you" },
+    { target: "OF", options: ["UV", "OF", "UF"], soundKey: "tw_of" },
+    { target: "DO", options: ["DO", "DU", "BO"], soundKey: "tw_do" },
+    { target: "FROM", options: ["FROM", "FRUM", "FUM"], soundKey: "tw_from" },
+    { target: "ARE", options: ["AR", "ARE", "OR"], soundKey: "tw_are" }
 ];
 
 // --- PRELOAD FUNCTION ---
@@ -167,6 +183,18 @@ function preload() {
     this.load.image('sootcoin', 'assets/sootcoin.png');
 
     this.load.audio('backgroundMusic', 'assets/backgroundmusic.mp3');
+    this.load.audio('l2backgroundMusic', 'assets/l2backgroundmusic.mp3');
+
+    this.load.audio('tw_this', 'assets/tw_this.mp3');
+    this.load.audio('tw_that', 'assets/tw_that.mp3');
+    this.load.audio('tw_the', 'assets/tw_the.mp3');
+    this.load.audio('tw_look', 'assets/tw_look.mp3');
+    this.load.audio('tw_said', 'assets/tw_said.mp3');
+    this.load.audio('tw_you', 'assets/tw_you.mp3');
+    this.load.audio('tw_of', 'assets/tw_of.mp3');
+    this.load.audio('tw_do', 'assets/tw_do.mp3');
+    this.load.audio('tw_from', 'assets/tw_from.mp3');
+    this.load.audio('tw_are', 'assets/tw_are.mp3');
 
     this.load.audio('cat', 'assets/cat.wav');
     this.load.audio('big', 'assets/big.wav');
@@ -185,7 +213,6 @@ function create() {
     score = 0;
     isSmashing = false;
     isDead = false;
-    roundComplete = false;
     roundObjectsMap = {};
     activeCastle = null;
     pendingCastleStartX = null;
@@ -207,7 +234,7 @@ function create() {
     };
 
     // Shuffle a copy so the original array is never mutated
-    activeRounds = Phaser.Utils.Array.Shuffle([...rounds]);
+    activeRounds = Phaser.Utils.Array.Shuffle([...(currentGameLevel === 2 ? level2Rounds : rounds)]);
 
     // 1. Add Parallax Backgrounds
     const bg1Key = currentGameLevel === 1 ? 'bg1' : 'l2bg1';
@@ -247,12 +274,14 @@ function create() {
     howlsCastle = null;
     howlsFrame = 0;
     howlsFrameTimer = 0;
+    howlsOffScreenTimer = 0;
     if (currentGameLevel === 2) {
         spawnHowlsCastle(this);
     }
 
     // Play Background Music
-    backgroundMusic = this.sound.add('backgroundMusic', { loop: true, volume: 0.5 });
+    const musicKey = currentGameLevel === 2 ? 'l2backgroundMusic' : 'backgroundMusic';
+    backgroundMusic = this.sound.add(musicKey, { loop: true, volume: 0.5 });
     backgroundMusic.play();
     window.backgroundMusic = backgroundMusic;
 
@@ -381,7 +410,6 @@ function create() {
     this.physics.add.collider(player, floors);
     this.physics.add.collider(player, wordBlocks, hitBlock, null, this);
     this.physics.add.collider(enemies, floors);
-    this.physics.add.collider(player, roundCompleteBlock, hitRoundCompleteBlock, null, this);
     this.physics.add.collider(player, enemies, hitEnemy, null, this);
     this.physics.add.collider(sootCoins, platforms);
     this.physics.add.collider(sootCoins, floors);
@@ -478,11 +506,6 @@ function update() {
     } else {
         // 3. Player Movement — only when not smashing
 
-         if (roundComplete) {
-            player.setVelocityX(50); // Gentle nudge towards the final block
-            return; // Stop normal movement
-        }
-
         if (cursors.left.isDown || window.leftButtonPressed) {
             player.setVelocityX(-PLAYER.MOVE_VELOCITY);
             player.anims.play('run', true);
@@ -556,7 +579,7 @@ function update() {
     // 7. Audio Trigger for Target Word
     if (!wordSpoken && player.x > audioTriggerX) {
         const data = activeRounds[currentRound % activeRounds.length];
-        const soundKey = data.target.toLowerCase().trim();
+        const soundKey = data.soundKey || data.target.toLowerCase().trim();
         if (this.cache.audio.exists(soundKey)) {
             this.sound.play(soundKey);
         }
@@ -567,14 +590,15 @@ function update() {
 // --- CUSTOM FUNCTIONS ---
 
 function spawnHowlsCastle(scene) {
-    const startX = Phaser.Math.Between(100, config.width - 100);
+    // Start off the right edge — parallax drift pulls him into view naturally as the player runs
+    const startX = config.width + 150;
     const startY = Phaser.Math.Between(HOWLS.MIN_Y, HOWLS.MAX_Y);
     howlsCastle = scene.add.image(startX, startY, 'howls1');
     howlsCastle.setScrollFactor(0, 1); // X: screen-fixed (wandering); Y: world-space (stays down when camera pans up)
     howlsCastle.setDepth(-18);      // between bg1 (-30) and bg2 (-10)
     const t = (startY - HOWLS.MIN_Y) / (HOWLS.MAX_Y - HOWLS.MIN_Y);
     howlsCastle.setScale(Phaser.Math.Linear(HOWLS.MIN_SCALE, HOWLS.MAX_SCALE, t));
-    howlsVelX = (Math.random() < 0.5 ? 1 : -1) * HOWLS.SPEED_X;
+    howlsVelX = -HOWLS.SPEED_X; // walk in from the right
     howlsVelY = (Math.random() < 0.5 ? 1 : -1) * HOWLS.SPEED_Y;
     howlsDirTimer = Phaser.Math.Between(HOWLS.DIR_CHANGE_MIN, HOWLS.DIR_CHANGE_MAX);
 }
@@ -601,19 +625,29 @@ function updateHowlsCastle() {
         howlsDirTimer = Phaser.Math.Between(HOWLS.DIR_CHANGE_MIN, HOWLS.DIR_CHANGE_MAX);
     }
 
-    // Move
+    // Parallax drift — each frame, undo a fraction of the camera's scroll so Howl feels
+    // like he lives in the background world rather than being glued to the screen.
+    const cameraDelta = this.cameras.main.scrollX - (howlsCastle.prevScrollX ?? this.cameras.main.scrollX);
+    howlsCastle.prevScrollX = this.cameras.main.scrollX;
+    howlsCastle.x -= cameraDelta * HOWLS.PARALLAX_X;
+
+    // Move — X at full speed; Y scaled by depth so going from far→close feels gradual
     howlsCastle.x += howlsVelX * dtSec;
-    howlsCastle.y += howlsVelY * dtSec;
+    const depthT = Phaser.Math.Clamp((howlsCastle.y - HOWLS.MIN_Y) / (HOWLS.MAX_Y - HOWLS.MIN_Y), 0, 1);
+    const depthSpeedMul = Phaser.Math.Linear(0.2, 0.75, depthT);
+    howlsCastle.y += howlsVelY * depthSpeedMul * dtSec;
 
     // Flip to face direction of travel
     howlsCastle.setFlipX(howlsVelX < 0);
 
-    // Bounce off horizontal screen edges
-    if (howlsCastle.x < 60) {
-        howlsCastle.x = 60;
+    // Bounce off wide X bounds — allows wandering off-screen and back
+    const xMin = -HOWLS.WANDER_X;
+    const xMax = config.width + HOWLS.WANDER_X;
+    if (howlsCastle.x < xMin) {
+        howlsCastle.x = xMin;
         howlsVelX = Math.abs(howlsVelX);
-    } else if (howlsCastle.x > config.width - 60) {
-        howlsCastle.x = config.width - 60;
+    } else if (howlsCastle.x > xMax) {
+        howlsCastle.x = xMax;
         howlsVelX = -Math.abs(howlsVelX);
     }
 
@@ -629,6 +663,21 @@ function updateHowlsCastle() {
     // Scale by Y — higher up = smaller (far away), lower = bigger (closer)
     const t = (howlsCastle.y - HOWLS.MIN_Y) / (HOWLS.MAX_Y - HOWLS.MIN_Y);
     howlsCastle.setScale(Phaser.Math.Linear(HOWLS.MIN_SCALE, HOWLS.MAX_SCALE, t));
+
+    // Off-screen tracking — if Howl has been off screen too long, teleport him back to the edge
+    const isOnScreen = howlsCastle.x > -50 && howlsCastle.x < config.width + 50;
+    if (isOnScreen) {
+        howlsOffScreenTimer = 0;
+    } else {
+        howlsOffScreenTimer += dt;
+        if (howlsOffScreenTimer > 6000) {
+            // Reposition off the right edge (both positions are off-screen so no pop)
+            // Parallax + own velocity will carry him into view as the player keeps running
+            howlsCastle.x = config.width + 150;
+            howlsVelX = -HOWLS.SPEED_X;
+            howlsOffScreenTimer = 0;
+        }
+    }
 }
 
 function getCastleWorldX(startX) {
@@ -691,19 +740,21 @@ function updateCastleLifecycle() {
     }
 }
 
-function createRoundCompleteBlock(scene, startX) {
-    const x = startX + LEVEL.WIDTH - 200;
-    const y = config.height - 200;
-    roundCompleteBlock = scene.physics.add.staticSprite(x, y, 'bubbleblock1');
-    roundCompleteBlock.setDisplaySize(200, 80).refreshBody();
-    roundCompleteBlock.word = "END";
-    return roundCompleteBlock;
-}
-
 function spawnRound(index) {
     if (index >= rounds.length) {
         spawnLevelEnd.call(this);
         return;
+    }
+
+    // Level 2: guarantee Howl comes back on screen at the start of each round
+    if (currentGameLevel === 2 && howlsCastle && howlsCastle.active) {
+        const onScreen = howlsCastle.x > -50 && howlsCastle.x < config.width + 50;
+        if (!onScreen) {
+            // Reposition off the right edge (off-screen → off-screen, no visible pop)
+            howlsCastle.x = config.width + 150;
+            howlsVelX = -HOWLS.SPEED_X;
+            howlsOffScreenTimer = 0;
+        }
     }
 
     currentRound = index;
@@ -720,7 +771,6 @@ function spawnRound(index) {
         old.coins.forEach(c => { if (c && c.active) c.destroy(); });
         delete roundObjectsMap[cleanupIndex];
 
-        if (roundCompleteBlock && roundCompleteBlock.active) roundCompleteBlock.destroy();
     }
 
     // Bucket to track all objects created this round for later cleanup
@@ -736,11 +786,6 @@ function spawnRound(index) {
     if (!activeCastle || !activeCastle.active) {
         activeCastle = spawnCastle(this, startX);
     } else {
-         if (index === 10) {
-            // Last round, create END text
-             createRoundCompleteBlock(this, startX);
-        }
-
         pendingCastleStartX = startX;
     }
 
@@ -1030,24 +1075,7 @@ function hitBlock(player, block) {
     }
 }
 
-function hitRoundCompleteBlock(player, block) {
-     if (!roundComplete) {
-        roundComplete = true;
-        this.physics.pause();
-
-        // Display total soot sprites and Mikes defeated
-        const totalSprites = score;
-        const totalMikes = 5; //replace with actual count
-
-        const gameOverText = this.add.text(config.width / 2, config.height / 2 - 50, 'GAME COMPLETE!', { fontSize: '48px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
-        const spriteText = this.add.text(config.width / 2, config.height / 2 + 20, 'Total Soot Sprites: ' + totalSprites, { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
-        const mikesText = this.add.text(config.width / 2, config.height / 2 + 60, 'Total Mr. M\'s Defeated = ' + totalMikes, { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5);
-
-        gameOverText.setScrollFactor(0);
-        spriteText.setScrollFactor(0);
-        mikesText.setScrollFactor(0);
-    }
-}
+ 
 // Called when player touches Mike
 function hitEnemy(_player, _enemy) {
     if (isDead) return;
@@ -1114,9 +1142,10 @@ function spawnLevelEnd() {
     endBlock.setDisplaySize(280, 80);
     endBlock.setOrigin(0.5, 1);
     endBlock.refreshBody();
-    endBlock.phase = 0; // 0 = LEVEL 1 COMPLETE, 1 = GO TO LEVEL 2
+    endBlock.phase = (currentGameLevel === 1) ? 0 : 2; // 0 = LEVEL 1 COMPLETE, 1 = GO TO LEVEL 2, 2 = GAME COMPLETE
 
-    endBlockLabel = this.add.text(blockX, blockBottomY - 40, 'LEVEL 1\nCOMPLETE', {
+    const endLabelText = (currentGameLevel === 1) ? 'LEVEL 1\nCOMPLETE' : 'GAME\nCOMPLETE';
+    endBlockLabel = this.add.text(blockX, blockBottomY - 40, endLabelText, {
         fontSize: '20px', fill: '#ffffff', fontStyle: 'bold', align: 'center'
     }).setOrigin(0.5);
 
@@ -1138,6 +1167,9 @@ function hitEndBlock(player, block) {
         mikesDefeated = 0;
         if (window.backgroundMusic) window.backgroundMusic.stop();
         this.scene.restart();
+    } else if (block.phase === 2) {
+        block.body.enable = false;
+        showGameCompleteOverlay.call(this);
     }
 }
 
@@ -1172,6 +1204,29 @@ function showLevelCompleteOverlay() {
         if (endBlockLabel && endBlockLabel.active) endBlockLabel.setText('GO TO\nLEVEL 2');
         if (endBlock && endBlock.active) endBlock.body.enable = true;
     });
+}
+
+function showGameCompleteOverlay() {
+    // Flash the screen white briefly
+    const flash = this.add.rectangle(config.width / 2, config.height / 2, config.width, config.height, 0xffffff, 1);
+    flash.setScrollFactor(0).setDepth(200);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 400, onComplete: () => flash.destroy() });
+
+    // Dark overlay
+    const overlay = this.add.rectangle(config.width / 2, config.height / 2, config.width, config.height, 0x000000, 0.75);
+    overlay.setScrollFactor(0).setDepth(100);
+
+    const title = this.add.text(config.width / 2, config.height / 2 - 90, 'GAME COMPLETE!', {
+        fontSize: '52px', fill: '#fff', stroke: '#000', strokeThickness: 6, fontFamily: 'Arial'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+
+    const spritesText = this.add.text(config.width / 2, config.height / 2, `Total Soot Sprites: ${score}`, {
+        fontSize: '34px', fill: '#FFD700', stroke: '#000', strokeThickness: 4, fontFamily: 'Arial'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+
+    const mikesText = this.add.text(config.width / 2, config.height / 2 + 60, `Mr. M's Defeated: ${mikesDefeated}`, {
+        fontSize: '34px', fill: '#FFD700', stroke: '#000', strokeThickness: 4, fontFamily: 'Arial'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
 }
 
 function updateLifeIcons(scene) {
