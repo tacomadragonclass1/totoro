@@ -436,8 +436,23 @@ function create() {
 
 // --- UPDATE FUNCTION ---
 
+// Xbox / standard-mapping gamepad: stick or D-pad moves, A jumps, X or B swings the bag
+function readGamepad() {
+    const pad = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : []).find(p => p && p.connected);
+    if (!pad) return { left: false, right: false, jump: false, smash: false };
+    const b = i => !!(pad.buttons[i] && pad.buttons[i].pressed);
+    const x = pad.axes[0] || 0;
+    return {
+        left: x < -0.4 || b(14),
+        right: x > 0.4 || b(15),
+        jump: b(0),
+        smash: b(2) || b(1)
+    };
+}
+
 function update() {
     if (isDead) return;
+    const pad = readGamepad();
 
     // Parallax is handled automatically by setScrollFactor on each world-space tileSprite.
     // No manual tilePosition updates needed.
@@ -445,7 +460,7 @@ function update() {
     if (currentGameLevel === 2) updateHowlsCastle.call(this);
 
     // 2. Smash Attack
-    if ((ctrlKey.isDown || window.smashButtonPressed) && !isSmashing) {
+    if ((ctrlKey.isDown || window.smashButtonPressed || pad.smash) && !isSmashing) {
         isSmashing = true;
         player.setVelocityX(0);
 
@@ -506,11 +521,11 @@ function update() {
     } else {
         // 3. Player Movement — only when not smashing
 
-        if (cursors.left.isDown || window.leftButtonPressed) {
+        if (cursors.left.isDown || window.leftButtonPressed || pad.left) {
             player.setVelocityX(-PLAYER.MOVE_VELOCITY);
             player.anims.play('run', true);
             player.setFlipX(true);
-        } else if (cursors.right.isDown || window.rightButtonPressed) {
+        } else if (cursors.right.isDown || window.rightButtonPressed || pad.right) {
             player.setVelocityX(PLAYER.MOVE_VELOCITY);
             player.anims.play('run', true);
             player.setFlipX(false);
@@ -520,7 +535,7 @@ function update() {
         }
 
         // 4. Jump
-        if (cursors.space.isDown && (player.body.touching.down || player.body.blocked.down)) {
+        if ((cursors.space.isDown || pad.jump) && (player.body.touching.down || player.body.blocked.down)) {
 
             player.setVelocityY(PLAYER.JUMP_VELOCITY);
             playJumpSound();
